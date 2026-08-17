@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/c/php83/php.exe vendor/bin/pint --format agent app/Http/Responses/ApiResponse.php app/Http/Controllers/Api/AuthController.php)"
+    ]
+  }
+}
