@@ -25,6 +25,7 @@ class PermissionSeeder extends Seeder
             'manage-mls',
             'manage-states',
             'manage-counties',
+            'manage-cities',
         ];
 
         $permissions = collect($permissionNames)->mapWithKeys(
