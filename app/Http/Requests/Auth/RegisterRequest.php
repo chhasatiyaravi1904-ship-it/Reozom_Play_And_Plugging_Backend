@@ -4,6 +4,7 @@ namespace App\Http\Requests\Auth;
 
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
 
 class RegisterRequest extends FormRequest
@@ -19,19 +20,26 @@ class RegisterRequest extends FormRequest
     /**
      * Get the validation rules that apply to the request.
      *
-     * This is the public seller self-registration endpoint (RegisterPayload
-     * on the frontend has no role field), so role is not accepted as input —
-     * it is set server-side in the controller. Agent/admin accounts are
-     * provisioned separately, not through open registration.
+     * Public self-registration accepts agent/seller/buyer as the account
+     * type — never admin, which stays provisioned separately. Agent
+     * accounts additionally require admin approval before they can log in
+     * (handled in AuthController::register), but that's an activation
+     * concern, not a validation one.
      *
      * @return array<string, ValidationRule|array<mixed>|string>
      */
     public function rules(): array
     {
         return [
-            'fullName' => ['required', 'string', 'max:255'],
+            'userType' => ['required', Rule::in(['agent', 'seller', 'buyer'])],
+            'firstName' => ['required', 'string', 'max:255'],
+            'lastName' => ['required', 'string', 'max:255'],
             'email' => ['required', 'string', 'email', 'max:255', 'unique:users,email'],
             'phone' => ['required', 'string', 'max:30'],
+            'streetAddress' => ['required', 'string', 'max:255'],
+            'city' => ['required', 'string', 'max:255'],
+            'state' => ['required', 'string', 'max:10'],
+            'zip' => ['required', 'string', 'regex:/^\d{5}(-\d{4})?$/'],
             'password' => ['required', 'same:passwordConfirmation', Password::defaults()],
             'passwordConfirmation' => ['required', 'string'],
         ];

@@ -7,6 +7,7 @@ use Database\Factories\UserFactory;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
@@ -15,9 +16,9 @@ use Laravel\Sanctum\HasApiTokens;
 use Spatie\Permission\Traits\HasRoles;
 
 #[Fillable([
-    'name', 'email', 'phone', 'password', 'role',
+    'name', 'first_name', 'last_name', 'email', 'phone', 'password', 'role',
     'street_address', 'city', 'state', 'zip',
-    'company', 'office_number', 'extension', 'profile_finished',
+    'company', 'office_number', 'extension', 'profile_finished', 'is_active',
 ])]
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable implements MustVerifyEmail
@@ -37,7 +38,13 @@ class User extends Authenticatable implements MustVerifyEmail
             'password' => 'hashed',
             'role' => UserRole::class,
             'profile_finished' => 'boolean',
+            'is_active' => 'boolean',
         ];
+    }
+
+    public function scopeActive(Builder $query): Builder
+    {
+        return $query->where('is_active', true);
     }
 
     public function isAdmin(): bool

@@ -14,23 +14,32 @@ class UserResource extends JsonResource
      */
     public function toArray(Request $request): array
     {
+        $location = collect([$this->city, $this->state])->filter()->implode(', ');
+
         return [
             'id' => $this->id,
             'fullName' => $this->name,
+            'firstName' => $this->first_name,
+            'lastName' => $this->last_name,
             'email' => $this->email,
             'phone' => $this->phone,
             'role' => $this->role,
+            'isActive' => $this->is_active,
             'emailVerified' => $this->hasVerifiedEmail(),
             'streetAddress' => $this->street_address,
             'city' => $this->city,
             'state' => $this->state,
             'zip' => $this->zip,
+            'location' => $location !== '' ? $location : null,
             'company' => $this->company,
             'officeNumber' => $this->office_number,
             'extension' => $this->extension,
             'profileFinished' => $this->profile_finished,
+            'listingsCount' => $this->whenCounted('listings'),
+            'lastActiveAt' => $this->whenLoaded('loginLogs', fn () => $this->loginLogs->first()?->created_at),
             'permissions' => $this->getAllPermissions()->pluck('name'),
-            'created_at' => $this->created_at,
+            'createdAt' => $this->created_at,
+            'updatedAt' => $this->updated_at,
         ];
     }
 }

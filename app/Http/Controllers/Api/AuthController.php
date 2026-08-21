@@ -23,21 +23,43 @@ class AuthController extends Controller
     ) {}
 
     /**
-     * Register a new seller account (the public-facing registration form).
-     * Agent/admin accounts are provisioned separately.
+     * Register a new agent, seller, or buyer account (the public-facing
+     * registration form). Admin accounts are always provisioned separately.
+     * Agent accounts require admin approval — created inactive, with no
+     * token issued, until an admin activates them from the Users page.
      */
     public function register(RegisterRequest $request): JsonResponse
     {
+        $role = UserRole::from($request->validated('userType'));
+        $isPendingAgent = $role === UserRole::Agent;
+
+        $firstName = $request->validated('firstName');
+        $lastName = $request->validated('lastName');
+
         $user = User::create([
-            'name' => $request->validated('fullName'),
+            'name' => trim("{$firstName} {$lastName}"),
+            'first_name' => $firstName,
+            'last_name' => $lastName,
             'email' => $request->validated('email'),
             'phone' => $request->validated('phone'),
+            'street_address' => $request->validated('streetAddress'),
+            'city' => $request->validated('city'),
+            'state' => $request->validated('state'),
+            'zip' => $request->validated('zip'),
             'password' => Hash::make($request->validated('password')),
-            'role' => UserRole::Seller,
+            'role' => $role,
             'profile_finished' => false,
+            'is_active' => ! $isPendingAgent,
         ]);
 
         $user->sendEmailVerificationNotification();
+
+        if ($isPendingAgent) {
+            return api_success([
+                'user' => new UserResource($user),
+                'pendingApproval' => true,
+            ], 'Your agent account has been created and is pending admin approval. You will be notified once approved.', 201);
+        }
 
         $token = $user->createToken('api-token')->plainTextToken;
 
@@ -63,6 +85,20 @@ class AuthController extends Controller
         if (! $user->hasVerifiedEmail()) {
             throw ValidationException::withMessages([
                 'email' => ['Please verify your email address before signing in.'],
+            ]);
+        }
+
+        if (! $user->is_active) {
+            // A never-successfully-logged-in agent is still awaiting approval;
+            // login logs are only ever written past this same gate below, so
+            // their absence reliably distinguishes "pending" from "deactivated
+            // after having been active" without needing a separate column.
+            $isPendingApproval = $user->isAgent() && ! $user->loginLogs()->exists();
+
+            throw ValidationException::withMessages([
+                'email' => [$isPendingApproval
+                    ? 'Your agent account is pending admin approval.'
+                    : 'Your account has been deactivated. Contact an administrator.'],
             ]);
         }
 
