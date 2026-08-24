@@ -13,6 +13,7 @@ final class ApiResponse
     {
         return response()->json(array_filter([
             'success' => true,
+            'code' => $status,
             'message' => $message,
             'data' => $data,
         ], fn (mixed $value): bool => $value !== null), $status);
@@ -27,6 +28,7 @@ final class ApiResponse
     {
         return response()->json(array_filter([
             'success' => false,
+            'code' => $status,
             'message' => $message,
             'errors' => $errors,
         ], fn (mixed $value): bool => $value !== null), $status);
