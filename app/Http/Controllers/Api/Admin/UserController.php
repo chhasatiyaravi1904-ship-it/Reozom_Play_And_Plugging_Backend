@@ -2,12 +2,16 @@
 
 namespace App\Http\Controllers\Api\Admin;
 
+use App\Enums\UserRole;
+use App\Events\AgentAdded;
 use App\Http\Controllers\Concerns\FiltersAndPaginates;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\StoreUserRequest;
 use App\Http\Requests\Admin\UpdateUserRequest;
 use App\Http\Resources\UserResource;
 use App\Models\User;
+use App\Notifications\AgentVerifiedNotification;
+use App\Notifications\WelcomeNotification;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -23,7 +27,10 @@ class UserController extends Controller
     {
         $query = User::query()
             ->withCount('listings')
-            ->with(['loginLogs' => fn ($q) => $q->latest()->limit(1)]);
+            ->with([
+                'loginLogs' => fn ($q) => $q->latest()->limit(1),
+                'currentAgentPackage.package',
+            ]);
 
         if ($search = $request->string('search')->trim()->value()) {
             $query->where(function (Builder $q) use ($search) {
@@ -52,19 +59,29 @@ class UserController extends Controller
             ...$this->splitLocation($request->validated('location')),
         ]);
 
-        return api_success(new UserResource($user), 'User created.', 201);
+        if ($user->role === UserRole::Agent) {
+            // Admin-created agents start unverified with no other way to
+            // receive the verification link, and login is gated on
+            // hasVerifiedEmail() — without this they could never sign in.
+            AgentAdded::dispatch($user);
+        }
+
+        return api_success(new UserResource($user->loadMissing('currentAgentPackage.package')), 'User created.', 201);
     }
 
     public function show(User $user): JsonResponse
     {
-        $user->loadCount('listings')->load(['loginLogs' => fn ($q) => $q->latest()->limit(1)]);
+        $user->loadCount('listings')->load([
+            'loginLogs' => fn ($q) => $q->latest()->limit(1),
+            'currentAgentPackage.package',
+        ]);
 
         return api_success(new UserResource($user));
     }
 
     public function update(UpdateUserRequest $request, User $user): JsonResponse
     {
-        $data = $request->safe()->except(['password', 'location']);
+        $data = $request->safe()->except(['password', 'location', 'email_verified']);
 
         if ($request->filled('password')) {
             $data['password'] = Hash::make($request->validated('password'));
@@ -76,7 +93,18 @@ class UserController extends Controller
 
         $user->update($data);
 
-        return api_success(new UserResource($user), 'User updated.');
+        if ($request->has('email_verified')) {
+            if ($request->boolean('email_verified')) {
+                if (! $user->hasVerifiedEmail()) {
+                    $user->markEmailAsVerified();
+                    $user->notify($user->role === UserRole::Agent ? new AgentVerifiedNotification : new WelcomeNotification);
+                }
+            } else {
+                $user->forceFill(['email_verified_at' => null])->save();
+            }
+        }
+
+        return api_success(new UserResource($user->loadMissing('currentAgentPackage.package')), 'User updated.');
     }
 
     public function destroy(Request $request, User $user): JsonResponse

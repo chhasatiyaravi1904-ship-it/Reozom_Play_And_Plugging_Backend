@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\UserRole;
+use App\Notifications\VerifyEmailNotification;
 use Database\Factories\UserFactory;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -10,6 +11,7 @@ use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
@@ -98,5 +100,32 @@ class User extends Authenticatable implements MustVerifyEmail
     public function listings(): HasMany
     {
         return $this->hasMany(Listing::class);
+    }
+
+    public function agentPackages(): HasMany
+    {
+        return $this->hasMany(AgentPackage::class);
+    }
+
+    /**
+     * The agent's most recent package selection that hasn't expired yet.
+     * Packages recur (each selection/renewal creates a new row rather than
+     * updating one), so "current" is simply the latest row still in date —
+     * no separate status column to keep in sync.
+     */
+    public function currentAgentPackage(): HasOne
+    {
+        return $this->hasOne(AgentPackage::class)
+            ->where('expires_at', '>', now())
+            ->latestOfMany('started_at');
+    }
+
+    /**
+     * Send the REOZOM-branded verification email instead of the framework's
+     * generic default (same signed link, different copy/theme).
+     */
+    public function sendEmailVerificationNotification(): void
+    {
+        $this->notify(new VerifyEmailNotification);
     }
 }

@@ -7,11 +7,15 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\LoginRequest;
 use App\Http\Requests\Auth\RegisterRequest;
 use App\Http\Resources\UserResource;
+use App\Models\Package;
 use App\Models\User;
+use App\Notifications\AgentRegisteredNotification;
 use App\Services\AdminActivityLogger;
 use App\Services\LoginActivityLogger;
+use App\Services\PackageActivityLogger;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 
@@ -20,6 +24,7 @@ class AuthController extends Controller
     public function __construct(
         private readonly LoginActivityLogger $loginActivityLogger,
         private readonly AdminActivityLogger $adminActivityLogger,
+        private readonly PackageActivityLogger $packageActivityLogger,
     ) {}
 
     /**
@@ -52,7 +57,19 @@ class AuthController extends Controller
             'is_active' => ! $isPendingAgent,
         ]);
 
-        $user->sendEmailVerificationNotification();
+        if ($isPendingAgent) {
+            // Agents are always reviewed and verified by an admin — no
+            // self-service verify link to send, just set expectations.
+            $user->notify(new AgentRegisteredNotification);
+        } else {
+            $user->sendEmailVerificationNotification();
+        }
+
+        if ($isPendingAgent && $request->validated('packageId')) {
+            $this->assignPackage($user, $request->validated('packageId'), $request);
+        }
+
+        $user->loadMissing('currentAgentPackage.package');
 
         if ($isPendingAgent) {
             return api_success([
@@ -67,6 +84,27 @@ class AuthController extends Controller
             'token' => $token,
             'user' => new UserResource($user),
         ], 'Registration successful. Please check your email to verify your account.', 201);
+    }
+
+    /**
+     * Record the agent's chosen package at signup, matching what
+     * PackageController::select does for a post-login package pick.
+     */
+    private function assignPackage(User $user, string $packageId, Request $request): void
+    {
+        $package = Package::findOrFail($packageId);
+
+        DB::transaction(function () use ($user, $package, $request) {
+            $user->agentPackages()->create([
+                'package_id' => $package->id,
+                'started_at' => now(),
+                'expires_at' => now()->addDays($package->duration_days),
+            ]);
+
+            $user->assignRole($package->role_name);
+
+            $this->packageActivityLogger->log($user, $package->id, null, 'purchased', $request);
+        });
     }
 
     /**
@@ -101,6 +139,8 @@ class AuthController extends Controller
                     : 'Your account has been deactivated. Contact an administrator.'],
             ]);
         }
+
+        $user->loadMissing('currentAgentPackage.package');
 
         $token = $user->createToken('api-token')->plainTextToken;
 
@@ -137,6 +177,8 @@ class AuthController extends Controller
      */
     public function me(Request $request): JsonResponse
     {
-        return api_success(new UserResource($request->user()));
+        $user = $request->user()->loadMissing('currentAgentPackage.package');
+
+        return api_success(new UserResource($user));
     }
 }

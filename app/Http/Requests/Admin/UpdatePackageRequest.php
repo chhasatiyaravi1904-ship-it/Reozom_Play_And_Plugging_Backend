@@ -2,13 +2,11 @@
 
 namespace App\Http\Requests\Admin;
 
-use App\Enums\UserRole;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
-use Illuminate\Validation\Rules\Enum;
 
-class UpdateUserRequest extends FormRequest
+class UpdatePackageRequest extends FormRequest
 {
     /**
      * Determine if the user is authorized to make this request.
@@ -27,16 +25,15 @@ class UpdateUserRequest extends FormRequest
     {
         return [
             'name' => ['sometimes', 'string', 'max:255'],
-            'email' => [
-                'sometimes', 'email', 'max:255',
-                Rule::unique('users', 'email')->ignore($this->route('user')),
+            'slug' => [
+                'sometimes', 'string', 'max:255', 'regex:/^[a-z0-9]+(?:-[a-z0-9]+)*$/',
+                Rule::unique('packages', 'slug')->ignore($this->route('package')),
             ],
-            'phone' => ['nullable', 'string', 'max:30'],
-            'password' => ['sometimes', 'string', 'min:8'],
-            'role' => ['sometimes', new Enum(UserRole::class)],
-            'location' => ['nullable', 'string', 'max:255'],
+            'description' => ['nullable', 'string'],
+            'price' => ['nullable', 'numeric', 'min:0'],
+            'duration_days' => ['sometimes', 'integer', 'min:1'],
+            'sort_order' => ['sometimes', 'integer', 'min:0'],
             'is_active' => ['sometimes', 'boolean'],
-            'email_verified' => ['sometimes', 'boolean'],
         ];
     }
 }

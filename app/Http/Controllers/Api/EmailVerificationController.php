@@ -2,8 +2,12 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Enums\UserRole;
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Notifications\AgentRegisteredNotification;
+use App\Notifications\AgentVerifiedNotification;
+use App\Notifications\WelcomeNotification;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -29,6 +33,7 @@ class EmailVerificationController extends Controller
 
         if (! $user->hasVerifiedEmail()) {
             $user->markEmailAsVerified();
+            $user->notify($user->role === UserRole::Agent ? new AgentVerifiedNotification : new WelcomeNotification);
         }
 
         return redirect()->away("{$frontendUrl}/auth/email-verified?status=verified");
@@ -45,7 +50,7 @@ class EmailVerificationController extends Controller
             return api_success(null, 'Email is already verified.');
         }
 
-        $user->sendEmailVerificationNotification();
+        $this->sendPendingNotification($user);
 
         return api_success(null, 'Verification email sent.');
     }
@@ -63,10 +68,24 @@ class EmailVerificationController extends Controller
         $user = User::where('email', $request->string('email'))->first();
 
         if ($user && ! $user->hasVerifiedEmail()) {
-            $user->sendEmailVerificationNotification();
+            $this->sendPendingNotification($user);
         }
 
         // Always respond success — do not reveal whether the email exists.
         return api_success(null, 'If that account exists and is unverified, a new link has been sent.');
+    }
+
+    /**
+     * Agents never get a self-service verify link — only an admin can
+     * verify them from the Users page — so a "resend" for an agent just
+     * re-sends the "you're pending review" notice instead.
+     */
+    private function sendPendingNotification(User $user): void
+    {
+        if ($user->role === UserRole::Agent) {
+            $user->notify(new AgentRegisteredNotification);
+        } else {
+            $user->sendEmailVerificationNotification();
+        }
     }
 }

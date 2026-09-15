@@ -39,9 +39,10 @@ class RegisterRequest extends FormRequest
             'streetAddress' => ['required', 'string', 'max:255'],
             'city' => ['required', 'string', 'max:255'],
             'state' => ['required', 'string', 'max:10'],
-            'zip' => ['required', 'string', 'regex:/^\d{5}(-\d{4})?$/'],
+            'zip' => ['required', 'string', 'max:10'],
             'password' => ['required', 'same:passwordConfirmation', Password::defaults()],
             'passwordConfirmation' => ['required', 'string'],
+            'packageId' => ['nullable', 'string', Rule::exists('packages', 'id')->where('is_active', true)],
         ];
     }
 }

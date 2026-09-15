@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\Admin\PackageController as AdminPackageController;
 use App\Http\Controllers\Api\Admin\UserController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\EmailVerificationController;
@@ -9,6 +10,7 @@ use App\Http\Controllers\Api\Geography\StateController;
 use App\Http\Controllers\Api\ListingController;
 use App\Http\Controllers\Api\Mls\MlsDirectoryController;
 use App\Http\Controllers\Api\Mls\MlsInfoController;
+use App\Http\Controllers\Api\PackageController;
 use App\Http\Controllers\Api\PublicGeographyController;
 use App\Http\Controllers\Api\SocialAuthController;
 use Illuminate\Support\Facades\Route;
@@ -17,6 +19,10 @@ Route::controller(PublicGeographyController::class)->prefix('public')->group(fun
     Route::get('states', 'states')->name('public.states');
     Route::get('cities', 'cities')->name('public.cities');
 });
+
+// Public so the registration form can show package options before a
+// session exists. Selecting/switching a package still requires auth below.
+Route::get('packages', [PackageController::class, 'index'])->name('packages.index');
 
 Route::prefix('auth')->group(function () {
     Route::controller(AuthController::class)->group(function () {
@@ -117,6 +123,10 @@ Route::middleware('auth:sanctum')->group(function () {
         });
     });
 
+    Route::controller(PackageController::class)->prefix('packages')->group(function () {
+        Route::post('{package}/select', 'select')->name('packages.select');
+    });
+
     Route::prefix('admin')->group(function () {
         Route::controller(UserController::class)->prefix('users')->group(function () {
             Route::get('/', 'index')->name('users.index');
@@ -126,6 +136,17 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('/', 'store')->name('users.store');
                 Route::put('{user}', 'update')->name('users.update');
                 Route::delete('{user}', 'destroy')->name('users.destroy');
+            });
+        });
+
+        Route::controller(AdminPackageController::class)->prefix('packages')->group(function () {
+            Route::get('/', 'index')->name('admin.packages.index');
+            Route::get('{package}', 'show')->name('admin.packages.show');
+
+            Route::middleware('permission:manage-packages')->group(function () {
+                Route::post('/', 'store')->name('admin.packages.store');
+                Route::put('{package}', 'update')->name('admin.packages.update');
+                Route::delete('{package}', 'destroy')->name('admin.packages.destroy');
             });
         });
     });
