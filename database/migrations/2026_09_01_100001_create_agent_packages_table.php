@@ -17,8 +17,8 @@ return new class extends Migration
             // Restricted, not cascaded: deleting a package that agents have
             // already selected would silently erase their purchase history.
             $table->foreignUuid('package_id')->constrained()->restrictOnDelete();
-            $table->timestamp('started_at');
-            $table->timestamp('expires_at');
+            $table->timestamp('started_at')->nullable();
+            $table->timestamp('expires_at')->nullable();
             $table->timestamps();
 
             $table->index(['user_id', 'started_at']);

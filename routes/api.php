@@ -28,6 +28,8 @@ Route::prefix('auth')->group(function () {
     Route::controller(AuthController::class)->group(function () {
         Route::post('register', 'register')->name('auth.register');
         Route::post('login', 'login')->name('auth.login');
+        Route::post('verify-2fa', 'verify2fa')->name('auth.verify-2fa');
+        Route::post('resend-2fa', 'resend2fa')->name('auth.resend-2fa');
     });
 
     Route::controller(EmailVerificationController::class)->group(function () {
@@ -148,6 +150,14 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::put('{package}', 'update')->name('admin.packages.update');
                 Route::delete('{package}', 'destroy')->name('admin.packages.destroy');
             });
+        });
+
+        Route::controller(\App\Http\Controllers\ListingProcessController::class)->prefix('listing-processes')->group(function () {
+            Route::get('/', 'index')->name('admin.listing-processes.index');
+            Route::get('{listingProcess}', 'show')->name('admin.listing-processes.show');
+            Route::post('/', 'store')->name('admin.listing-processes.store');
+            Route::put('{listingProcess}', 'update')->name('admin.listing-processes.update');
+            Route::delete('{listingProcess}', 'destroy')->name('admin.listing-processes.destroy');
         });
     });
 });
