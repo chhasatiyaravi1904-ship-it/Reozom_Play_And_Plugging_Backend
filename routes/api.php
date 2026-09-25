@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\Admin\UserController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\EmailVerificationController;
 use App\Http\Controllers\Api\Geography\CityController;
+use App\Http\Controllers\Api\Geography\ZipCodeController;
 use App\Http\Controllers\Api\Geography\CountyController;
 use App\Http\Controllers\Api\Geography\StateController;
 use App\Http\Controllers\Api\ListingController;
@@ -100,6 +101,18 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/', 'store')->name('cities.store');
             Route::put('{city}', 'update')->name('cities.update');
             Route::delete('{city}', 'destroy')->name('cities.destroy');
+        });
+    });
+
+    Route::controller(ZipCodeController::class)->prefix('zip-codes')->group(function () {
+        Route::get('/', 'index')->name('zip-codes.index');
+        Route::get('{code}/lookup', 'lookup')->name('zip-codes.lookup');
+        Route::get('{zip_code}', 'show')->name('zip-codes.show');
+
+        Route::middleware('permission:manage-zip-codes')->group(function () {
+            Route::post('/', 'store')->name('zip-codes.store');
+            Route::put('{zip_code}', 'update')->name('zip-codes.update');
+            Route::delete('{zip_code}', 'destroy')->name('zip-codes.destroy');
         });
     });
 

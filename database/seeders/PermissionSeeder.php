@@ -26,6 +26,7 @@ class PermissionSeeder extends Seeder
             'manage-states',
             'manage-counties',
             'manage-cities',
+            'manage-zip-codes',
             'manage-packages',
         ];
 

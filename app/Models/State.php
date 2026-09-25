@@ -37,4 +37,9 @@ class State extends Model
     {
         return $query->where('is_active', true);
     }
+
+    public function zipCodes(): HasMany
+    {
+        return $this->hasMany(ZipCode::class);
+    }
 }

@@ -2,24 +2,21 @@
 
 namespace App\Models;
 
-use Database\Factories\CountyFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 
-class County extends Model
+class ZipCode extends Model
 {
-    /** @use HasFactory<CountyFactory> */
     use HasFactory, HasUuids;
 
     protected $fillable = [
-        'name',
         'code',
         'state_id',
-        'slug',
+        'county_id',
+        'city_id',
         'is_active',
     ];
 
@@ -35,18 +32,18 @@ class County extends Model
         return $this->belongsTo(State::class);
     }
 
-    public function cities(): HasMany
+    public function county(): BelongsTo
     {
-        return $this->hasMany(City::class);
+        return $this->belongsTo(County::class);
+    }
+
+    public function city(): BelongsTo
+    {
+        return $this->belongsTo(City::class);
     }
 
     public function scopeActive(Builder $query): Builder
     {
         return $query->where('is_active', true);
-    }
-
-    public function zipCodes(): HasMany
-    {
-        return $this->hasMany(ZipCode::class);
     }
 }
