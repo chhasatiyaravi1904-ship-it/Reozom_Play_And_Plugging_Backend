@@ -5,23 +5,21 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
-class ListingProcess extends Model
+class ServicePackage extends Model
 {
     use HasFactory;
 
     protected $fillable = [
-        'name',
-        'type',
-        'status',
         'agent_id',
-        'service_package_id',
-        'assigned_zips',
-        'config',
+        'name',
+        'description',
+        'price',
+        'is_active',
     ];
 
     protected $casts = [
-        'assigned_zips' => 'array',
-        'config' => 'array',
+        'is_active' => 'boolean',
+        'price' => 'decimal:2',
     ];
 
     public function agent()
@@ -29,8 +27,8 @@ class ListingProcess extends Model
         return $this->belongsTo(User::class, 'agent_id');
     }
 
-    public function servicePackage()
+    public function zipCodes()
     {
-        return $this->belongsTo(ServicePackage::class);
+        return $this->belongsToMany(ZipCode::class, 'service_package_zip_code');
     }
 }

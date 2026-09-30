@@ -40,6 +40,7 @@ class UserResource extends JsonResource
                 'id' => $this->currentAgentPackage->package_id,
                 'name' => $this->currentAgentPackage->package?->name,
                 'slug' => $this->currentAgentPackage->package?->slug,
+                'maxListingProcesses' => $this->currentAgentPackage->package?->max_listing_processes,
                 'startedAt' => $this->currentAgentPackage->started_at,
                 'expiresAt' => $this->currentAgentPackage->expires_at,
             ] : null,

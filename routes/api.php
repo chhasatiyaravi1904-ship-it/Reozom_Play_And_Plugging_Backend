@@ -21,6 +21,10 @@ Route::controller(PublicGeographyController::class)->prefix('public')->group(fun
     Route::get('cities', 'cities')->name('public.cities');
 });
 
+Route::controller(\App\Http\Controllers\Api\PublicServicePackageController::class)->prefix('public')->group(function () {
+    Route::get('service-packages/search', 'search')->name('public.service-packages.search');
+});
+
 // Public so the registration form can show package options before a
 // session exists. Selecting/switching a package still requires auth below.
 Route::get('packages', [PackageController::class, 'index'])->name('packages.index');
@@ -57,6 +61,9 @@ Route::prefix('auth')->group(function () {
             Route::post('logout', 'logout')->name('auth.logout');
             Route::get('me', 'me')->name('auth.me');
         });
+        
+        Route::put('profile', [\App\Http\Controllers\Api\ProfileController::class, 'update'])->name('profile.update');
+        
         Route::post('email/verification-notification', [EmailVerificationController::class, 'resend'])
             ->name('verification.send');
     });
@@ -168,9 +175,23 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::controller(\App\Http\Controllers\ListingProcessController::class)->prefix('listing-processes')->group(function () {
             Route::get('/', 'index')->name('admin.listing-processes.index');
             Route::get('{listingProcess}', 'show')->name('admin.listing-processes.show');
-            Route::post('/', 'store')->name('admin.listing-processes.store');
-            Route::put('{listingProcess}', 'update')->name('admin.listing-processes.update');
-            Route::delete('{listingProcess}', 'destroy')->name('admin.listing-processes.destroy');
+
+            Route::middleware('permission:manage-listing-processes')->group(function () {
+                Route::post('/', 'store')->name('admin.listing-processes.store');
+                Route::put('{listingProcess}', 'update')->name('admin.listing-processes.update');
+                Route::delete('{listingProcess}', 'destroy')->name('admin.listing-processes.destroy');
+            });
+        });
+
+    });
+
+    Route::prefix('agent')->group(function () {
+        Route::controller(\App\Http\Controllers\Api\ServicePackageController::class)->prefix('service-packages')->group(function () {
+            Route::get('/', 'index')->name('agent.service-packages.index');
+            Route::get('{servicePackage}', 'show')->name('agent.service-packages.show');
+            Route::post('/', 'store')->name('agent.service-packages.store');
+            Route::put('{servicePackage}', 'update')->name('agent.service-packages.update');
+            Route::delete('{servicePackage}', 'destroy')->name('agent.service-packages.destroy');
         });
     });
 });

@@ -58,29 +58,24 @@ class AuthController extends Controller
             'password' => Hash::make($request->validated('password')),
             'role' => $role,
             'profile_finished' => false,
-            'is_active' => ! $isPendingAgent,
+            'is_active' => !$isPendingAgent,
         ]);
 
-        if ($isPendingAgent) {
-            // Agents are always reviewed and verified by an admin — no
-            // self-service verify link to send, just set expectations.
-            $user->notify(new AgentRegisteredNotification);
-        } else {
-            $user->sendEmailVerificationNotification();
-        }
+        // No longer sending email verification since email is auto-verified at registration
+                  $user->sendEmailVerificationNotification();
+
 
         if ($isPendingAgent && $request->validated('packageId')) {
             $this->assignPackage($user, $request->validated('packageId'), $request);
         }
 
-        $user->loadMissing('currentAgentPackage.package');
-
         if ($isPendingAgent) {
             return api_success([
-                'user' => new UserResource($user),
                 'pendingApproval' => true,
-            ], 'Your agent account has been created and is pending admin approval. You will be notified once approved.', 201);
+            ], 'Registration successful. Your agent account is awaiting approval.', 201);
         }
+
+        $user->loadMissing('currentAgentPackage.package');
 
         $token = $user->createToken('api-token')->plainTextToken;
 

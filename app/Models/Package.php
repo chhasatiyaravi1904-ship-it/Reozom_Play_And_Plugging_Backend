@@ -20,6 +20,7 @@ class Package extends Model
         'duration_days',
         'sort_order',
         'is_active',
+        'max_listing_processes',
     ];
 
     protected function casts(): array
@@ -29,6 +30,7 @@ class Package extends Model
             'duration_days' => 'integer',
             'sort_order' => 'integer',
             'is_active' => 'boolean',
+            'max_listing_processes' => 'integer',
         ];
     }
 

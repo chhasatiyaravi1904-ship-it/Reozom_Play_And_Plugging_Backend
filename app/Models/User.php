@@ -107,6 +107,11 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->hasMany(AgentPackage::class);
     }
 
+    public function listingProcesses(): HasMany
+    {
+        return $this->hasMany(ListingProcess::class, 'agent_id');
+    }
+
     /**
      * The agent's most recent package selection that hasn't expired yet.
      * Packages recur (each selection/renewal creates a new row rather than
@@ -118,6 +123,11 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->hasOne(AgentPackage::class)
             ->where('expires_at', '>', now())
             ->latestOfMany('started_at');
+    }
+
+    public function hasActivePackage(): bool
+    {
+        return $this->currentAgentPackage()->exists();
     }
 
     /**

@@ -23,6 +23,7 @@ class PackageResource extends JsonResource
             'durationDays' => $this->duration_days,
             'sortOrder' => $this->sort_order,
             'isActive' => $this->is_active,
+            'maxListingProcesses' => $this->max_listing_processes,
             'createdAt' => $this->created_at,
             'updatedAt' => $this->updated_at,
         ];

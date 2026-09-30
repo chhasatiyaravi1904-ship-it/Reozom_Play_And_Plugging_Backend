@@ -30,6 +30,7 @@ class StorePackageRequest extends FormRequest
             'duration_days' => ['required', 'integer', 'min:1'],
             'sort_order' => ['sometimes', 'integer', 'min:0'],
             'is_active' => ['sometimes', 'boolean'],
+            'max_listing_processes' => ['nullable', 'integer', 'min:1'],
         ];
     }
 }

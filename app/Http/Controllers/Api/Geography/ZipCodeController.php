@@ -15,18 +15,18 @@ class ZipCodeController extends Controller
 {
     use FiltersAndPaginates;
 
-    private const SORTABLE = ['code', 'created_at'];
+    private const SORTABLE = ['id', 'code', 'created_at'];
 
     public function index(Request $request): JsonResponse
     {
         $query = ZipCode::query()->with(['state', 'county', 'city']);
 
-        $this->applySearch($query, $request, ['code']);
+        $this->applySearch($query, $request, 'code');
         $this->applyActiveFilter($query, $request);
         $this->applyExactFilter($query, $request, 'state_id');
         $this->applyExactFilter($query, $request, 'county_id');
         $this->applyExactFilter($query, $request, 'city_id');
-        $this->applySort($query, $request, self::SORTABLE);
+        $this->applySort($query, $request, self::SORTABLE, 'code');
 
         return $this->paginatedResponse($query, $request, ZipCodeResource::class);
     }
