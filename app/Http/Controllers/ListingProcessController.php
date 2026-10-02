@@ -16,6 +16,8 @@ class ListingProcessController extends Controller
 
         if ($request->user()->isAgent()) {
             $query->where('agent_id', $request->user()->id);
+        } else {
+            $query->whereNull('agent_id');
         }
 
         return response()->json($query->get());
@@ -66,6 +68,16 @@ class ListingProcessController extends Controller
             }
         }
 
+        if (($validated['type'] ?? null) === 'default') {
+            $query = ListingProcess::where('type', 'default');
+            if ($user->isAgent()) {
+                $query->where('agent_id', $user->id);
+            } else {
+                $query->whereNull('agent_id');
+            }
+            $query->update(['type' => 'custom']);
+        }
+
         $process = ListingProcess::create($validated);
 
         return response()->json($process, 201);
@@ -104,6 +116,16 @@ class ListingProcessController extends Controller
 
         if ($request->user()->isAgent()) {
             unset($validated['agent_id']);
+        }
+
+        if (($validated['type'] ?? null) === 'default' && $listingProcess->type !== 'default') {
+            $query = ListingProcess::where('type', 'default');
+            if ($request->user()->isAgent()) {
+                $query->where('agent_id', $request->user()->id);
+            } else {
+                $query->whereNull('agent_id');
+            }
+            $query->update(['type' => 'custom']);
         }
 
         $listingProcess->update($validated);

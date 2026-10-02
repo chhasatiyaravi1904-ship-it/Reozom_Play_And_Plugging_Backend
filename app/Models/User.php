@@ -21,6 +21,7 @@ use Spatie\Permission\Traits\HasRoles;
     'name', 'first_name', 'last_name', 'email', 'phone', 'password', 'role',
     'street_address', 'city', 'state', 'zip',
     'company', 'office_number', 'extension', 'profile_finished', 'is_active',
+    'email_verified_at',
 ])]
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable implements MustVerifyEmail

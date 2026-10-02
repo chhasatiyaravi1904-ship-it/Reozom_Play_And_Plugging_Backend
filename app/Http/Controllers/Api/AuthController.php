@@ -58,21 +58,13 @@ class AuthController extends Controller
             'password' => Hash::make($request->validated('password')),
             'role' => $role,
             'profile_finished' => false,
-            'is_active' => !$isPendingAgent,
+            'is_active' => true,
         ]);
 
-        // No longer sending email verification since email is auto-verified at registration
-                  $user->sendEmailVerificationNotification();
-
+        $user->sendEmailVerificationNotification();
 
         if ($isPendingAgent && $request->validated('packageId')) {
             $this->assignPackage($user, $request->validated('packageId'), $request);
-        }
-
-        if ($isPendingAgent) {
-            return api_success([
-                'pendingApproval' => true,
-            ], 'Registration successful. Your agent account is awaiting approval.', 201);
         }
 
         $user->loadMissing('currentAgentPackage.package');
@@ -172,16 +164,8 @@ class AuthController extends Controller
         }
 
         if (! $user->is_active) {
-            // A never-successfully-logged-in agent is still awaiting approval;
-            // login logs are only ever written past this same gate below, so
-            // their absence reliably distinguishes "pending" from "deactivated
-            // after having been active" without needing a separate column.
-            $isPendingApproval = $user->isAgent() && ! $user->loginLogs()->exists();
-
             throw ValidationException::withMessages([
-                'email' => [$isPendingApproval
-                    ? 'Your agent account is pending admin approval.'
-                    : 'Your account has been deactivated. Contact an administrator.'],
+                'email' => ['Your account has been deactivated. Contact an administrator.'],
             ]);
         }
 

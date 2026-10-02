@@ -37,6 +37,11 @@ Route::prefix('auth')->group(function () {
         Route::post('resend-2fa', 'resend2fa')->name('auth.resend-2fa');
     });
 
+    Route::controller(\App\Http\Controllers\Api\PasswordResetController::class)->group(function () {
+        Route::post('forgot-password', 'forgotPassword')->name('password.email');
+        Route::post('reset-password', 'resetPassword')->name('password.update');
+    });
+
     Route::controller(EmailVerificationController::class)->group(function () {
         // Opened directly from the verification email — no bearer token exists
         // for this request, so it deliberately sits outside auth:sanctum.
@@ -76,6 +81,23 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('{listing}', 'show')->name('listings.show');
         Route::put('{listing}', 'update')->name('listings.update');
         Route::post('{listing}/submit', 'submit')->name('listings.submit');
+    });
+
+    Route::controller(\App\Http\Controllers\Api\ListingWorkflowController::class)->prefix('listings')->group(function () {
+        Route::get('{listing}/workflow', 'show')->name('listings.workflow.show');
+        Route::post('{listing}/steps/{step}', 'submitStep')->name('listings.workflow.step');
+    });
+
+    Route::controller(\App\Http\Controllers\Api\ListingDocumentController::class)->prefix('listings')->group(function () {
+        Route::get('{listing}/documents', 'index')->name('listings.documents.index');
+    });
+
+    Route::controller(\App\Http\Controllers\ListingProcessController::class)->prefix('listing-processes')->group(function () {
+        Route::get('/', 'index')->name('listing-processes.index');
+        Route::get('{listingProcess}', 'show')->name('listing-processes.show');
+        Route::post('/', 'store')->name('listing-processes.store');
+        Route::put('{listingProcess}', 'update')->name('listing-processes.update');
+        Route::delete('{listingProcess}', 'destroy')->name('listing-processes.destroy');
     });
 
     Route::controller(StateController::class)->prefix('states')->group(function () {
@@ -172,16 +194,7 @@ Route::middleware('auth:sanctum')->group(function () {
             });
         });
 
-        Route::controller(\App\Http\Controllers\ListingProcessController::class)->prefix('listing-processes')->group(function () {
-            Route::get('/', 'index')->name('admin.listing-processes.index');
-            Route::get('{listingProcess}', 'show')->name('admin.listing-processes.show');
 
-            Route::middleware('permission:manage-listing-processes')->group(function () {
-                Route::post('/', 'store')->name('admin.listing-processes.store');
-                Route::put('{listingProcess}', 'update')->name('admin.listing-processes.update');
-                Route::delete('{listingProcess}', 'destroy')->name('admin.listing-processes.destroy');
-            });
-        });
 
     });
 

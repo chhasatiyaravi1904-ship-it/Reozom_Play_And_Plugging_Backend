@@ -23,10 +23,11 @@ class StoreListingRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'address' => ['required', 'string', 'max:255'],
-            'city' => ['required', 'string', 'max:255'],
-            'state' => ['required', 'string', 'max:255'],
+            'address' => ['nullable', 'string', 'max:255'],
+            'city' => ['nullable', 'string', 'max:255'],
+            'state' => ['nullable', 'string', 'max:255'],
             'zip' => ['required', 'string', 'max:10'],
+            'packageId' => ['nullable', 'integer', 'exists:service_packages,id'],
         ];
     }
 }

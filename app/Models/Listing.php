@@ -19,6 +19,9 @@ class Listing extends Model
         'city',
         'state',
         'zip',
+        'service_package_id',
+        'listing_process_id',
+        'workflow_snapshot',
         'steps_completed',
         'steps_total',
     ];
@@ -28,6 +31,7 @@ class Listing extends Model
         return [
             'steps_completed' => 'integer',
             'steps_total' => 'integer',
+            'workflow_snapshot' => 'array',
         ];
     }
 
@@ -50,5 +54,15 @@ class Listing extends Model
         }
 
         return (int) round(($this->steps_completed / $this->steps_total) * 100);
+    }
+
+    public function listingProcess(): BelongsTo
+    {
+        return $this->belongsTo(ListingProcess::class);
+    }
+
+    public function answers()
+    {
+        return $this->hasMany(ListingAnswer::class);
     }
 }
