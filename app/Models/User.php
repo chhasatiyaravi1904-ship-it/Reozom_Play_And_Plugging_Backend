@@ -29,6 +29,8 @@ class User extends Authenticatable implements MustVerifyEmail
     /** @use HasFactory<UserFactory> */
     use HasApiTokens, HasFactory, HasRoles, Notifiable;
 
+    protected $guard_name = 'web';
+
     /**
      * Get the attributes that should be cast.
      *

@@ -8,7 +8,7 @@ use Illuminate\Http\Request;
 
 class PublicServicePackageController extends Controller
 {
-    public function search(Request $request)
+    public function search(Request $request, \App\Services\PackageAvailabilityService $packageService)
     {
         $request->validate([
             'zipcode' => 'required|string',
@@ -16,12 +16,7 @@ class PublicServicePackageController extends Controller
 
         $zipcode = $request->zipcode;
 
-        $packages = ServicePackage::with('agent:id,first_name,last_name,email')
-            ->where('is_active', true)
-            ->whereHas('zipCodes', function ($query) use ($zipcode) {
-                $query->where('code', 'like', '%' . $zipcode . '%');
-            })
-            ->get();
+        $packages = $packageService->getAvailablePackages($zipcode);
 
         return response()->json($packages);
     }

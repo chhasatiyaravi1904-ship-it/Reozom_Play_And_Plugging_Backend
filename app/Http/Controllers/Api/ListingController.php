@@ -24,67 +24,36 @@ class ListingController extends Controller
         return api_success(ListingResource::collection($listings));
     }
 
-    public function store(StoreListingRequest $request): JsonResponse
-    {
+    public function store(
+        StoreListingRequest $request, 
+        \App\Services\PackageAvailabilityService $packageService, 
+        \App\Services\ListingWorkflowService $workflowService
+    ): JsonResponse {
         $packageId = $request->validated('packageId');
+        $zip = $request->validated('zip');
         
-        $process = null;
+        if (!$packageId || !$zip) {
+            return api_error('Service package and ZIP code are required.', 422);
+        }
 
-        if ($packageId) {
-            $servicePackage = \App\Models\ServicePackage::find($packageId);
-            
-            if ($servicePackage) {
-                // 1. Try process explicitly linked to package
-                $process = \App\Models\ListingProcess::where('service_package_id', $packageId)->first();
-                
-                // 2. Try process assigned to specific zip for this agent
-                $zip = $request->validated('zip');
-                if (!$process && $zip) {
-                    $process = \App\Models\ListingProcess::where('agent_id', $servicePackage->agent_id)
-                        ->whereJsonContains('assigned_zips', $zip)
-                        ->first();
-                }
-                
-                // 3. Try agent's default process
-                if (!$process) {
-                    $process = \App\Models\ListingProcess::where('agent_id', $servicePackage->agent_id)
-                        ->where('type', 'default')
-                        ->first();
-                }
-            }
+        try {
+            $servicePackage = $packageService->validatePackageForZip($packageId, $zip);
+            $process = $workflowService->resolveListingProcess($servicePackage);
+        } catch (\Exception $e) {
+            return api_error($e->getMessage(), 422);
         }
-        
-        // 4. Fallback if no package or no process found via package
-        if (!$process) {
-            if ($request->user()->isAgent()) {
-                $process = \App\Models\ListingProcess::where('agent_id', $request->user()->id)
-                    ->where('type', 'default')
-                    ->first();
-            }
-            
-            // Final fallback to system default
-            if (!$process) {
-                $process = \App\Models\ListingProcess::whereNull('agent_id')
-                    ->where('type', 'default')
-                    ->first() ?? \App\Models\ListingProcess::whereNull('agent_id')->first();
-            }
-        }
-        
-        $processId = $process?->id;
 
-        $stepsTotal = 4; // Disclosures, Documents, Review, Submit
-        if (isset($process) && $process && is_array($process->config)) {
-            $stepsTotal += count($process->config);
-        }
+        $snapshot = $workflowService->createWorkflowSnapshot($process);
+        $stepsTotal = count($snapshot);
 
         $listing = $request->user()->listings()->create([
             'address' => $request->validated('address') ?? '',
             'city'    => $request->validated('city') ?? '',
             'state'   => $request->validated('state') ?? '',
-            'zip'     => $request->validated('zip'),
+            'zip'     => $zip,
             'service_package_id' => $packageId,
-            'listing_process_id' => $processId,
-            'workflow_snapshot'  => $process ? $process->config : null,
+            'listing_process_id' => $process->id,
+            'workflow_snapshot'  => $snapshot,
             'status' => 'in_progress',
             'steps_completed' => 0,
             'steps_total' => $stepsTotal,

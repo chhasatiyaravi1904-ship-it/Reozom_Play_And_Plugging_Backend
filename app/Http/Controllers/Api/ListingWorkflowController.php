@@ -31,7 +31,7 @@ class ListingWorkflowController extends Controller
         ]);
     }
 
-    public function submitStep(Request $request, Listing $listing, string $stepId): JsonResponse
+    public function submitStep(Request $request, Listing $listing, string $stepId, \App\Services\ListingWorkflowService $workflowService): JsonResponse
     {
         $this->authorizeOwner($request, $listing);
 
@@ -41,6 +41,8 @@ class ListingWorkflowController extends Controller
             ['listing_id' => $listing->id, 'step_id' => $stepId],
             ['values' => $values]
         );
+
+        $workflowService->calculateCompletedSteps($listing);
 
         return api_success(['step' => $stepId, 'saved' => true], 'Step saved successfully.');
     }

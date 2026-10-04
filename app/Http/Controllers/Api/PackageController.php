@@ -90,6 +90,9 @@ class PackageController extends Controller
             $user->removeRole($role);
         }
 
-        $user->assignRole($package->role_name);
+        // Ensure the role exists before assigning it to avoid RoleDoesNotExist exception
+        // Explicitly set the guard to 'web' to prevent Sanctum vs Web guard mismatch errors
+        $role = \Spatie\Permission\Models\Role::findOrCreate($package->role_name, 'web');
+        $user->assignRole($role);
     }
 }

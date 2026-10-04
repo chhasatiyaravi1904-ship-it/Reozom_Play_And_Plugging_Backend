@@ -57,14 +57,17 @@ class ListingProcessController extends Controller
         if ($user->isAgent()) {
             $validated['agent_id'] = $user->id;
 
-            // Automatically seed with the system default config if none is provided
-            if (empty($validated['config'])) {
+            // Only copy the Admin's default config if the agent explicitly chose "Start with Default Template"
+            if (empty($validated['config']) && ($request->input('isDefault') === true || ($validated['type'] ?? null) === 'default')) {
                 $systemDefault = ListingProcess::whereNull('agent_id')->where('type', 'default')->first()
                     ?? ListingProcess::whereNull('agent_id')->first();
                     
                 if ($systemDefault && !empty($systemDefault->config)) {
                     $validated['config'] = $systemDefault->config;
                 }
+            } else if (empty($validated['config'])) {
+                // Start from scratch with a clean slate
+                $validated['config'] = [];
             }
         }
 
