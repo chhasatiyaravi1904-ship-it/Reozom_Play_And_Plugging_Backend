@@ -46,18 +46,31 @@ class ListingController extends Controller
         $snapshot = $workflowService->createWorkflowSnapshot($process);
         $stepsTotal = count($snapshot);
 
-        $listing = $request->user()->listings()->create([
-            'address' => $request->validated('address') ?? '',
-            'city'    => $request->validated('city') ?? '',
-            'state'   => $request->validated('state') ?? '',
-            'zip'     => $zip,
-            'service_package_id' => $packageId,
-            'listing_process_id' => $process->id,
-            'workflow_snapshot'  => $snapshot,
-            'status' => 'in_progress',
-            'steps_completed' => 0,
-            'steps_total' => $stepsTotal,
-        ]);
+        $listing = null;
+
+        \Illuminate\Support\Facades\DB::transaction(function () use ($request, $zip, $packageId, $process, $snapshot, $stepsTotal, &$listing) {
+            $listing = $request->user()->listings()->create([
+                'address' => $request->validated('address') ?? '',
+                'city'    => $request->validated('city') ?? '',
+                'state'   => $request->validated('state') ?? '',
+                'zip'     => $zip,
+                'service_package_id' => $packageId,
+                'listing_process_id' => $process->id,
+                'workflow_snapshot'  => $snapshot,
+                'status' => 'in_progress',
+                'steps_completed' => 0,
+                'steps_total' => $stepsTotal,
+            ]);
+
+            if ($request->has('answers') && is_array($request->input('answers'))) {
+                foreach ($request->input('answers') as $stepId => $values) {
+                    $listing->answers()->create([
+                        'step_id' => $stepId,
+                        'values' => $values,
+                    ]);
+                }
+            }
+        });
 
         return api_success(new ListingResource($listing), 'Listing created.', 201);
     }

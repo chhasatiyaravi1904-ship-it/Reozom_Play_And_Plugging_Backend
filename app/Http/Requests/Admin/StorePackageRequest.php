@@ -31,6 +31,8 @@ class StorePackageRequest extends FormRequest
             'sort_order' => ['sometimes', 'integer', 'min:0'],
             'is_active' => ['sometimes', 'boolean'],
             'max_listing_processes' => ['nullable', 'integer', 'min:1'],
+            'features' => ['nullable', 'array'],
+            'features.*' => ['string'],
         ];
     }
 }

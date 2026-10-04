@@ -27,7 +27,7 @@ class StoreListingRequest extends FormRequest
             'city' => ['nullable', 'string', 'max:255'],
             'state' => ['nullable', 'string', 'max:255'],
             'zip' => ['required', 'string', 'max:10'],
-            'packageId' => ['nullable', 'integer', 'exists:service_packages,id'],
+            'packageId' => ['required', 'integer', 'exists:service_packages,id'],
         ];
     }
 }

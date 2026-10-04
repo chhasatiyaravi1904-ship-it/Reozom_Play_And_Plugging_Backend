@@ -184,6 +184,7 @@ Route::middleware('auth:sanctum')->group(function () {
         });
 
         Route::controller(AdminPackageController::class)->prefix('packages')->group(function () {
+            Route::get('permissions', 'permissions')->name('admin.packages.permissions');
             Route::get('/', 'index')->name('admin.packages.index');
             Route::get('{package}', 'show')->name('admin.packages.show');
 

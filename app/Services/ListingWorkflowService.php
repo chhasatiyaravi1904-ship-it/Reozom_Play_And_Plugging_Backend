@@ -25,6 +25,13 @@ class ListingWorkflowService
             ->where('status', 'active')
             ->first();
 
+        if (!$process) {
+            $process = ListingProcess::whereNull('agent_id')
+                ->where('type', 'default')
+                ->where('status', 'active')
+                ->first();
+        }
+
         if (!$process || empty($process->config)) {
             throw new \Exception('The selected service package does not have an active listing process.');
         }

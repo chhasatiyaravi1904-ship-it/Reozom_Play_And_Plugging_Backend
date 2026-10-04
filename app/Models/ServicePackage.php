@@ -31,4 +31,9 @@ class ServicePackage extends Model
     {
         return $this->belongsToMany(ZipCode::class, 'service_package_zip_code');
     }
+
+    public function listingProcess()
+    {
+        return $this->hasOne(ListingProcess::class);
+    }
 }

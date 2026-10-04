@@ -47,6 +47,10 @@ class PackageController extends Controller
 
         $previous = $user->agentPackages()->latest('started_at')->first();
 
+        if ($previous && $previous->package_id === $package->id && $previous->expires_at > now()) {
+            return api_error('You already have this package active.', 422);
+        }
+
         $action = match (true) {
             $previous === null => 'purchased',
             $previous->package_id === $package->id => 'renewed',

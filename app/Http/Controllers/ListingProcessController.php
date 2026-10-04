@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\ListingProcess;
+use App\Http\Requests\SaveListingProcessRequest;
 use Illuminate\Http\Request;
 
 class ListingProcessController extends Controller
@@ -12,10 +13,19 @@ class ListingProcessController extends Controller
      */
     public function index(Request $request)
     {
+        $user = $request->user();
+        
+        if (!$user->isAdmin() && !$user->isAgent()) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
         $query = ListingProcess::with('agent:id,first_name,last_name');
 
-        if ($request->user()->isAgent()) {
-            $query->where('agent_id', $request->user()->id);
+        if ($user->isAgent()) {
+            $query->where('agent_id', $user->id)
+                  ->orWhere(function($q) {
+                      $q->whereNull('agent_id')->where('type', 'default');
+                  });
         } else {
             $query->whereNull('agent_id');
         }
@@ -26,9 +36,13 @@ class ListingProcessController extends Controller
     /**
      * Store a newly created resource in storage.
      */
-    public function store(Request $request)
+    public function store(SaveListingProcessRequest $request)
     {
         $user = $request->user();
+
+        if (!$user->isAdmin() && !$user->isAgent()) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
 
         if ($user->isAgent()) {
             if (!$user->hasActivePackage()) {
@@ -44,31 +58,16 @@ class ListingProcessController extends Controller
             }
         }
 
-        $validated = $request->validate([
-            'name' => 'required|string|max:255',
-            'type' => 'nullable|string|in:default,custom',
-            'status' => 'nullable|string|in:active,draft',
-            'agent_id' => 'nullable|exists:users,id',
-            'service_package_id' => 'nullable|exists:service_packages,id',
-            'assigned_zips' => 'nullable|array',
-            'config' => 'nullable|array',
-        ]);
+        $validated = $request->validated();
 
         if ($user->isAgent()) {
             $validated['agent_id'] = $user->id;
 
-            // Only copy the Admin's default config if the agent explicitly chose "Start with Default Template"
-            if (empty($validated['config']) && ($request->input('isDefault') === true || ($validated['type'] ?? null) === 'default')) {
-                $systemDefault = ListingProcess::whereNull('agent_id')->where('type', 'default')->first()
-                    ?? ListingProcess::whereNull('agent_id')->first();
-                    
-                if ($systemDefault && !empty($systemDefault->config)) {
-                    $validated['config'] = $systemDefault->config;
-                }
-            } else if (empty($validated['config'])) {
-                // Start from scratch with a clean slate
+            if (empty($validated['config'])) {
                 $validated['config'] = [];
             }
+        } else {
+            $validated['agent_id'] = null;
         }
 
         if (($validated['type'] ?? null) === 'default') {
@@ -91,7 +90,19 @@ class ListingProcessController extends Controller
      */
     public function show(Request $request, ListingProcess $listingProcess)
     {
-        if ($request->user()->isAgent() && $listingProcess->agent_id !== $request->user()->id) {
+        $user = $request->user();
+
+        if (!$user->isAdmin() && !$user->isAgent()) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        if ($user->isAgent() && $listingProcess->agent_id !== $user->id) {
+            if ($listingProcess->agent_id !== null || $listingProcess->type !== 'default') {
+                return response()->json(['message' => 'Unauthorized'], 403);
+            }
+        }
+
+        if ($user->isAdmin() && $listingProcess->agent_id !== null) {
             return response()->json(['message' => 'Unauthorized'], 403);
         }
 
@@ -101,21 +112,23 @@ class ListingProcessController extends Controller
     /**
      * Update the specified resource in storage.
      */
-    public function update(Request $request, ListingProcess $listingProcess)
+    public function update(SaveListingProcessRequest $request, ListingProcess $listingProcess)
     {
-        if ($request->user()->isAgent() && $listingProcess->agent_id !== $request->user()->id) {
+        $user = $request->user();
+
+        if (!$user->isAdmin() && !$user->isAgent()) {
             return response()->json(['message' => 'Unauthorized'], 403);
         }
 
-        $validated = $request->validate([
-            'name' => 'sometimes|required|string|max:255',
-            'type' => 'nullable|string|in:default,custom',
-            'status' => 'nullable|string|in:active,draft',
-            'agent_id' => 'nullable|exists:users,id',
-            'service_package_id' => 'nullable|exists:service_packages,id',
-            'assigned_zips' => 'nullable|array',
-            'config' => 'nullable|array',
-        ]);
+        if ($user->isAgent() && $listingProcess->agent_id !== $user->id) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        if ($user->isAdmin() && $listingProcess->agent_id !== null) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        $validated = $request->validated();
 
         if ($request->user()->isAgent()) {
             unset($validated['agent_id']);
@@ -141,7 +154,17 @@ class ListingProcessController extends Controller
      */
     public function destroy(Request $request, ListingProcess $listingProcess)
     {
-        if ($request->user()->isAgent() && $listingProcess->agent_id !== $request->user()->id) {
+        $user = $request->user();
+
+        if (!$user->isAdmin() && !$user->isAgent()) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        if ($user->isAgent() && $listingProcess->agent_id !== $user->id) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        if ($user->isAdmin() && $listingProcess->agent_id !== null) {
             return response()->json(['message' => 'Unauthorized'], 403);
         }
 

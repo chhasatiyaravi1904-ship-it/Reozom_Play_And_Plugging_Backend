@@ -18,6 +18,12 @@ class PackageController extends Controller
 
     private const SORTABLE = ['name', 'price', 'duration_days', 'sort_order', 'created_at'];
 
+    public function permissions(): JsonResponse
+    {
+        $permissions = \Spatie\Permission\Models\Permission::pluck('name');
+        return api_success($permissions);
+    }
+
     public function index(Request $request): JsonResponse
     {
         $query = Package::query();
@@ -31,18 +37,25 @@ class PackageController extends Controller
 
     public function store(StorePackageRequest $request): JsonResponse
     {
-        $roleName = 'package-'.$request->validated('slug');
+        $validated = $request->validated();
+        $features = $validated['features'] ?? [];
+        unset($validated['features']);
+
+        $roleName = 'package-'.$validated['slug'];
 
         $package = Package::create([
-            ...$request->validated(),
+            ...$validated,
             'role_name' => $roleName,
             'sort_order' => $request->integer('sort_order', 0),
             'is_active' => $request->boolean('is_active', true),
         ]);
 
-        // Every package needs a matching role for agent selection to sync
-        // permissions onto — see Api\PackageController::select().
-        Role::findOrCreate($package->role_name);
+        $role = Role::findOrCreate($package->role_name, 'web');
+        if (!empty($features)) {
+            // Only sync valid permissions
+            $validPermissions = \Spatie\Permission\Models\Permission::whereIn('name', $features)->pluck('name');
+            $role->syncPermissions($validPermissions);
+        }
 
         return api_success(new PackageResource($package), 'Package created.', 201);
     }
@@ -54,7 +67,18 @@ class PackageController extends Controller
 
     public function update(UpdatePackageRequest $request, Package $package): JsonResponse
     {
-        $package->update($request->validated());
+        $validated = $request->validated();
+        $hasFeaturesKey = array_key_exists('features', $validated);
+        $features = $validated['features'] ?? [];
+        unset($validated['features']);
+
+        $package->update($validated);
+
+        if ($hasFeaturesKey) {
+            $role = Role::findOrCreate($package->role_name, 'web');
+            $validPermissions = \Spatie\Permission\Models\Permission::whereIn('name', $features)->pluck('name');
+            $role->syncPermissions($validPermissions);
+        }
 
         return api_success(new PackageResource($package), 'Package updated.');
     }

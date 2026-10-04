@@ -24,6 +24,7 @@ class PackageResource extends JsonResource
             'sortOrder' => $this->sort_order,
             'isActive' => $this->is_active,
             'maxListingProcesses' => $this->max_listing_processes,
+            'features' => \Spatie\Permission\Models\Role::findByName($this->role_name, 'web')?->permissions->pluck('name')->toArray() ?? [],
             'createdAt' => $this->created_at,
             'updatedAt' => $this->updated_at,
         ];
