@@ -26,6 +26,8 @@ class SaveListingProcessRequest extends FormRequest
             'config.*.id' => 'required|string',
             'config.*.order' => 'required|integer',
             'config.*.name' => 'required|string',
+            'config.*.type' => 'nullable|string',
+            'config.*.isSystem' => 'nullable|boolean',
             'config.*.visible' => 'nullable|boolean',
             'config.*.description' => 'nullable|string',
             'config.*.sections' => 'nullable|array',

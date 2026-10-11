@@ -25,6 +25,11 @@ Route::controller(\App\Http\Controllers\Api\PublicServicePackageController::clas
     Route::get('service-packages/search', 'search')->name('public.service-packages.search');
 });
 
+Route::controller(\App\Http\Controllers\Api\PublicListingController::class)->prefix('public')->group(function () {
+    Route::get('listings', 'index')->name('public.listings.index');
+    Route::get('listings/{listing}', 'show')->name('public.listings.show');
+});
+
 // Public so the registration form can show package options before a
 // session exists. Selecting/switching a package still requires auth below.
 Route::get('packages', [PackageController::class, 'index'])->name('packages.index');
@@ -83,6 +88,15 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('{listing}/submit', 'submit')->name('listings.submit');
     });
 
+    Route::controller(\App\Http\Controllers\Api\ListingImageController::class)->prefix('listings/{listing}/images')->group(function () {
+        Route::get('/', 'index')->name('listings.images.index');
+        Route::post('/', 'store')->name('listings.images.store');
+        Route::post('reorder', 'reorder')->name('listings.images.reorder');
+        Route::put('{image}', 'update')->name('listings.images.update');
+        Route::post('{image}/primary', 'setPrimary')->name('listings.images.primary');
+        Route::delete('{image}', 'destroy')->name('listings.images.destroy');
+    });
+
     Route::controller(\App\Http\Controllers\Api\ListingWorkflowController::class)->prefix('listings')->group(function () {
         Route::get('{listing}/workflow', 'show')->name('listings.workflow.show');
         Route::post('{listing}/steps/{step}', 'submitStep')->name('listings.workflow.step');
@@ -90,6 +104,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::controller(\App\Http\Controllers\Api\ListingDocumentController::class)->prefix('listings')->group(function () {
         Route::get('{listing}/documents', 'index')->name('listings.documents.index');
+        Route::post('{listing}/documents', 'store')->name('listings.documents.store');
+        Route::delete('{listing}/documents/{document}', 'destroy')->name('listings.documents.destroy');
+        Route::get('{listing}/documents/{document}/download', 'download')->name('listings.documents.download');
     });
 
     Route::controller(\App\Http\Controllers\ListingProcessController::class)->prefix('listing-processes')->group(function () {

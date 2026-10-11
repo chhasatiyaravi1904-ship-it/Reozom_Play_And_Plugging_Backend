@@ -65,4 +65,67 @@ class Listing extends Model
     {
         return $this->hasMany(ListingAnswer::class);
     }
+
+    public function images()
+    {
+        return $this->hasMany(ListingImage::class)
+            ->orderBy('is_primary', 'desc')
+            ->orderBy('sort_order');
+    }
+
+    public function documents()
+    {
+        return $this->hasMany(ListingDocument::class);
+    }
+
+    public function getPublicListingData(): array
+    {
+        $systemStepId = 'system_public_info';
+        
+        $answer = $this->answers->where('step_id', $systemStepId)->first();
+        $values = $answer ? ($answer->values ?? []) : [];
+        
+        $snapshot = $this->workflow_snapshot ?? [];
+        $publicStep = null;
+        
+        foreach ($snapshot as $step) {
+            if (($step['id'] ?? '') === $systemStepId) {
+                $publicStep = $step;
+                break;
+            }
+        }
+        
+        if (!$publicStep) {
+            return [
+                'step_id' => $systemStepId,
+                'fields' => []
+            ];
+        }
+        
+        $fieldsData = [];
+        
+        foreach ($publicStep['sections'] ?? [] as $section) {
+            foreach ($section['fields'] ?? [] as $field) {
+                $fieldId = $field['id'] ?? null;
+                if (!$fieldId) {
+                    continue;
+                }
+                
+                $fieldsData[] = [
+                    'id' => $fieldId,
+                    'label' => $field['label'] ?? $field['name'] ?? '',
+                    'type' => $field['type'] ?? 'text',
+                    'value' => array_key_exists($fieldId, $values) ? $values[$fieldId] : null,
+                    'public_display' => $field['public_display'] ?? true,
+                    'show_on_card' => $field['show_on_card'] ?? true,
+                    'show_on_detail' => $field['show_on_detail'] ?? true,
+                ];
+            }
+        }
+        
+        return [
+            'step_id' => $systemStepId,
+            'fields' => $fieldsData,
+        ];
+    }
 }

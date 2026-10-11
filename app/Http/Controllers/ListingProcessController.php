@@ -8,6 +8,109 @@ use Illuminate\Http\Request;
 
 class ListingProcessController extends Controller
 {
+    private function enforceSystemStep(array $config): array
+    {
+        $systemStepId = 'system_public_info';
+        $systemStepIndex = -1;
+        
+        foreach ($config as $index => $step) {
+            if (($step['id'] ?? '') === $systemStepId) {
+                $systemStepIndex = $index;
+                break;
+            }
+        }
+        
+        $systemStep = [
+            'id' => $systemStepId,
+            'name' => 'Public Listing Information',
+            'type' => 'public_listing',
+            'isSystem' => true,
+            'order' => 1,
+            'visible' => true,
+            'sections' => [
+                [
+                    'id' => 'public_basic_information',
+                    'order' => 1,
+                    'name' => 'Basic Information',
+                    'fields' => [
+                        [
+                            'id' => 'listing_title',
+                            'name' => 'listing_title',
+                            'label' => 'Listing Title',
+                            'type' => 'text',
+                            'required' => true,
+                            'active' => true,
+                        ],
+                        [
+                            'id' => 'listing_price',
+                            'name' => 'listing_price',
+                            'label' => 'Price',
+                            'type' => 'number',
+                            'required' => true,
+                            'active' => true,
+                        ],
+                        [
+                            'id' => 'property_type',
+                            'name' => 'property_type',
+                            'label' => 'Property Type',
+                            'type' => 'select',
+                            'required' => true,
+                            'active' => true,
+                            'options' => [
+                                ['label' => 'Single Family', 'value' => 'single_family'],
+                                ['label' => 'Condo', 'value' => 'condo'],
+                                ['label' => 'Townhouse', 'value' => 'townhouse']
+                            ]
+                        ],
+                        [
+                            'id' => 'bedrooms',
+                            'name' => 'bedrooms',
+                            'label' => 'Bedrooms',
+                            'type' => 'number',
+                            'required' => true,
+                            'active' => true,
+                        ],
+                        [
+                            'id' => 'bathrooms',
+                            'name' => 'bathrooms',
+                            'label' => 'Bathrooms',
+                            'type' => 'number',
+                            'required' => true,
+                            'active' => true,
+                        ],
+                        [
+                            'id' => 'square_feet',
+                            'name' => 'square_feet',
+                            'label' => 'Square Feet',
+                            'type' => 'number',
+                            'required' => true,
+                            'active' => true,
+                        ],
+                    ]
+                ]
+            ]
+        ];
+
+        if ($systemStepIndex === -1) {
+            array_unshift($config, $systemStep);
+            $systemStepIndex = 0;
+        } else {
+            $config[$systemStepIndex]['id'] = $systemStepId;
+            $config[$systemStepIndex]['type'] = 'public_listing';
+            $config[$systemStepIndex]['isSystem'] = true;
+        }
+
+        foreach ($config as $index => &$step) {
+            $step['order'] = $index + 1;
+            if (($step['id'] ?? '') === $systemStepId && $index !== $systemStepIndex) {
+                $step['id'] = 'step_' . uniqid();
+                unset($step['type'], $step['isSystem']);
+            }
+        }
+        
+        return $config;
+    }
+
     /**
      * Display a listing of the resource.
      */
@@ -69,6 +172,8 @@ class ListingProcessController extends Controller
         } else {
             $validated['agent_id'] = null;
         }
+
+        $validated['config'] = $this->enforceSystemStep($validated['config'] ?? []);
 
         if (($validated['type'] ?? null) === 'default') {
             $query = ListingProcess::where('type', 'default');
@@ -133,6 +238,8 @@ class ListingProcessController extends Controller
         if ($request->user()->isAgent()) {
             unset($validated['agent_id']);
         }
+
+        $validated['config'] = $this->enforceSystemStep($validated['config'] ?? []);
 
         if (($validated['type'] ?? null) === 'default' && $listingProcess->type !== 'default') {
             $query = ListingProcess::where('type', 'default');
