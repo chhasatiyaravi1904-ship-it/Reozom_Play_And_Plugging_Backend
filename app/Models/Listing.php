@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -24,6 +25,10 @@ class Listing extends Model
         'workflow_snapshot',
         'steps_completed',
         'steps_total',
+        'moderation_status',
+        'moderated_by',
+        'moderated_at',
+        'rejection_reason',
     ];
 
     protected function casts(): array
@@ -32,6 +37,7 @@ class Listing extends Model
             'steps_completed' => 'integer',
             'steps_total' => 'integer',
             'workflow_snapshot' => 'array',
+            'moderated_at' => 'datetime',
         ];
     }
 
@@ -45,6 +51,30 @@ class Listing extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function servicePackage(): BelongsTo
+    {
+        return $this->belongsTo(ServicePackage::class);
+    }
+
+    public function moderator(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'moderated_by');
+    }
+
+    public function scopePublished(Builder $query): Builder
+    {
+        return $query->where('status', 'published')
+            ->where(function ($q) {
+                $q->whereNull('moderation_status')
+                  ->orWhere('moderation_status', '!=', 'rejected');
+            });
+    }
+
+    public function isPublished(): bool
+    {
+        return $this->status === 'published' && $this->moderation_status !== 'rejected';
     }
 
     public function progressPercent(): int

@@ -20,6 +20,11 @@ class LoginActivityTest extends TestCase
             'password' => 'password',
         ])->assertOk();
 
+        $this->postJson('/api/auth/verify-2fa', [
+            'email' => $user->email,
+            'code' => '123456',
+        ])->assertOk();
+
         $this->assertDatabaseHas('user_login_logs', [
             'user_id' => $user->id,
             'login_type' => 'direct',
@@ -33,6 +38,11 @@ class LoginActivityTest extends TestCase
         $this->postJson('/api/auth/login', [
             'email' => $admin->email,
             'password' => 'password',
+        ])->assertOk();
+
+        $this->postJson('/api/auth/verify-2fa', [
+            'email' => $admin->email,
+            'code' => '123456',
         ])->assertOk();
 
         $this->assertDatabaseHas('admin_activity_logs', [

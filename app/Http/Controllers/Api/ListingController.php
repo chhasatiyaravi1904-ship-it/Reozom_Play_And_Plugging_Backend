@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Http\Controllers\Api\ListingDocumentController;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Listings\StoreListingRequest;
 use App\Http\Requests\Listings\UpdateListingRequest;
@@ -19,7 +20,20 @@ class ListingController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $listings = $request->user()->listings()->latest()->get();
+        $user = $request->user();
+
+        if ($user->isAdmin()) {
+            $listings = Listing::latest()->get();
+        } elseif ($user->isAgent()) {
+            $listings = Listing::where('user_id', $user->id)
+                ->orWhereHas('servicePackage', function ($q) use ($user) {
+                    $q->where('agent_id', $user->id);
+                })
+                ->latest()
+                ->get();
+        } else {
+            $listings = $user->listings()->latest()->get();
+        }
 
         return api_success(ListingResource::collection($listings));
     }
@@ -29,6 +43,8 @@ class ListingController extends Controller
         \App\Services\PackageAvailabilityService $packageService, 
         \App\Services\ListingWorkflowService $workflowService
     ): JsonResponse {
+        Gate::authorize('create', Listing::class);
+
         $packageId = $request->validated('packageId');
         $zip = $request->validated('zip');
         
@@ -58,6 +74,7 @@ class ListingController extends Controller
                 'listing_process_id' => $process->id,
                 'workflow_snapshot'  => $snapshot,
                 'status' => 'in_progress',
+                'moderation_status' => 'none',
                 'steps_completed' => 0,
                 'steps_total' => $stepsTotal,
             ]);
@@ -77,34 +94,69 @@ class ListingController extends Controller
 
     public function show(Request $request, Listing $listing): JsonResponse
     {
-        $this->authorizeOwner($request, $listing);
+        Gate::authorize('view', $listing);
 
         return api_success(new ListingResource($listing));
     }
 
     public function update(UpdateListingRequest $request, Listing $listing): JsonResponse
     {
-        $this->authorizeOwner($request, $listing);
+        Gate::authorize('update', $listing);
 
-        $listing->update($request->validated());
+        $validatedData = $request->validated();
+
+        // Approved Rule: Editing a published listing removes it from public visibility
+        // until it is revalidated and republished.
+        if ($listing->status === 'published') {
+            $validatedData['status'] = 'in_progress';
+            $validatedData['moderation_status'] = 'edited_pending_revalidation';
+        }
+
+        $listing->update($validatedData);
 
         return api_success(new ListingResource($listing), 'Listing updated.');
     }
 
     public function submit(Request $request, Listing $listing): JsonResponse
     {
-        $this->authorizeOwner($request, $listing);
+        Gate::authorize('submit', $listing);
 
+        $snapshot = $listing->workflow_snapshot ?? [];
+        $snapshotStepIds = array_column($snapshot, 'id');
+        $answeredStepIds = $listing->answers()->pluck('step_id')->toArray();
+
+        $stepsTotal = count($snapshot) > 0 ? count($snapshot) : $listing->steps_total;
+        $validCompletedSteps = array_intersect($snapshotStepIds, $answeredStepIds);
+        $completedCount = count(array_unique($validCompletedSteps));
+
+        // Check required documents configured for this listing
+        $requiredDocTypes = ListingDocumentController::getRequiredDocumentTypes($listing);
+        $uploadedDocTypes = $listing->documents()->pluck('type')->toArray();
+        $missingDocTypes = array_diff($requiredDocTypes, $uploadedDocTypes);
+        $hasRequiredDocs = empty($missingDocTypes);
+
+        // Approved Rule: Automatic publication after required listing completion and validation steps.
+        $isComplete = ($completedCount >= $stepsTotal) && ($stepsTotal > 0) && $hasRequiredDocs;
+
+        if ($isComplete) {
+            $listing->update([
+                'status' => 'published',
+                'moderation_status' => 'auto_approved',
+                'steps_completed' => $stepsTotal,
+                'moderated_at' => now(),
+            ]);
+
+            return api_success(new ListingResource($listing), 'Listing completed, validated, and published.');
+        }
+
+        // If submitted but requirements are pending, store submitted state for review/resubmission
         $listing->update([
             'status' => 'submitted',
-            'steps_completed' => $listing->steps_total,
+            'moderation_status' => 'pending_review',
+            'steps_completed' => $completedCount,
         ]);
 
-        return api_success(new ListingResource($listing), 'Listing submitted.');
-    }
-
-    private function authorizeOwner(Request $request, Listing $listing): void
-    {
-        Gate::allowIf(fn () => $listing->user_id === $request->user()->id);
+        return api_success(new ListingResource($listing), 'Listing submitted for review.');
     }
 }
+

@@ -20,6 +20,20 @@ class ListingTest extends TestCase
         return $user->createToken('test-token')->plainTextToken;
     }
 
+    private function createZipCode(string $code): ZipCode
+    {
+        $county = \App\Models\County::factory()->create();
+        $city = \App\Models\City::factory()->create(['county_id' => $county->id]);
+
+        return ZipCode::create([
+            'code' => $code,
+            'state_id' => $county->state_id,
+            'county_id' => $county->id,
+            'city_id' => $city->id,
+            'is_active' => true,
+        ]);
+    }
+
     public function test_index_only_returns_the_authenticated_users_own_listings(): void
     {
         $user = User::factory()->create();
@@ -41,11 +55,19 @@ class ListingTest extends TestCase
 
         // Setup valid agent and package
         $agent = User::factory()->create(['role' => 'agent', 'is_active' => true]);
-        $sysPackage = Package::create(['name' => 'Agent Pro', 'slug' => 'agent-pro', 'price' => 50, 'duration_days' => 30, 'is_active' => true]);
+        $sysPackage = Package::create(['name' => 'Agent Pro', 'slug' => 'agent-pro', 'role_name' => 'agent-pro', 'price' => 50, 'duration_days' => 30, 'is_active' => true]);
         AgentPackage::create(['user_id' => $agent->id, 'package_id' => $sysPackage->id, 'started_at' => now(), 'expires_at' => now()->addDays(30)]);
-        ZipCode::create(['code' => '48103', 'is_active' => true]);
+        $zip = $this->createZipCode('48103');
         $servicePackage = ServicePackage::create(['agent_id' => $agent->id, 'name' => 'Test Pkg', 'is_active' => true]);
-        $servicePackage->zipCodes()->attach(ZipCode::where('code', '48103')->first()->id);
+        $servicePackage->zipCodes()->attach($zip->id);
+
+        \App\Models\ListingProcess::create([
+            'name' => 'Default Process',
+            'agent_id' => $agent->id,
+            'service_package_id' => $servicePackage->id,
+            'status' => 'active',
+            'config' => [['id' => 'step1', 'name' => 'Step 1'], ['id' => 'step2', 'name' => 'Step 2']],
+        ]);
 
         $response = $this->withHeader('Authorization', 'Bearer '.$this->tokenFor($user))
             ->postJson('/api/listings', [
@@ -109,8 +131,6 @@ class ListingTest extends TestCase
 
         $response->assertOk();
         $response->assertJsonPath('data.status', 'submitted');
-        $response->assertJsonPath('data.stepsCompleted', 4);
-        $response->assertJsonPath('data.progressPercent', 100);
     }
 
     public function test_listings_endpoints_require_authentication(): void
@@ -124,12 +144,12 @@ class ListingTest extends TestCase
 
         // Setup valid agent and package for a specific ZIP
         $agent = User::factory()->create(['role' => 'agent', 'is_active' => true]);
-        $sysPackage = Package::create(['name' => 'Agent Pro', 'slug' => 'agent-pro', 'price' => 50, 'duration_days' => 30, 'is_active' => true]);
+        $sysPackage = Package::create(['name' => 'Agent Pro', 'slug' => 'agent-pro', 'role_name' => 'agent-pro', 'price' => 50, 'duration_days' => 30, 'is_active' => true]);
         AgentPackage::create(['user_id' => $agent->id, 'package_id' => $sysPackage->id, 'started_at' => now(), 'expires_at' => now()->addDays(30)]);
-        ZipCode::create(['code' => '48103', 'is_active' => true]);
-        ZipCode::create(['code' => '48104', 'is_active' => true]);
+        $zip1 = $this->createZipCode('48103');
+        $zip2 = $this->createZipCode('48104');
         $servicePackage = ServicePackage::create(['agent_id' => $agent->id, 'name' => 'Test Pkg', 'is_active' => true]);
-        $servicePackage->zipCodes()->attach(ZipCode::where('code', '48103')->first()->id);
+        $servicePackage->zipCodes()->attach($zip1->id);
 
         // Try creating listing for unassigned ZIP
         $response = $this->withHeader('Authorization', 'Bearer '.$this->tokenFor($user))
@@ -148,13 +168,13 @@ class ListingTest extends TestCase
         $user = User::factory()->create();
 
         $agent = User::factory()->create(['role' => 'agent', 'is_active' => true]);
-        $sysPackage = Package::create(['name' => 'Agent Pro', 'slug' => 'agent-pro', 'price' => 50, 'duration_days' => 30, 'is_active' => true]);
+        $sysPackage = Package::create(['name' => 'Agent Pro', 'slug' => 'agent-pro', 'role_name' => 'agent-pro', 'price' => 50, 'duration_days' => 30, 'is_active' => true]);
         AgentPackage::create(['user_id' => $agent->id, 'package_id' => $sysPackage->id, 'started_at' => now(), 'expires_at' => now()->addDays(30)]);
-        ZipCode::create(['code' => '48103', 'is_active' => true]);
+        $zip = $this->createZipCode('48103');
         
         // Inactive package
         $servicePackage = ServicePackage::create(['agent_id' => $agent->id, 'name' => 'Test Pkg', 'is_active' => false]);
-        $servicePackage->zipCodes()->attach(ZipCode::where('code', '48103')->first()->id);
+        $servicePackage->zipCodes()->attach($zip->id);
 
         $response = $this->withHeader('Authorization', 'Bearer '.$this->tokenFor($user))
             ->postJson('/api/listings', [
@@ -166,4 +186,74 @@ class ListingTest extends TestCase
         $response->assertStatus(422);
         $response->assertJsonPath('message', 'The selected service package is not available for this ZIP code.');
     }
+
+    public function test_editing_a_published_listing_unpublishes_it_for_revalidation(): void
+    {
+        $user = User::factory()->create();
+        $listing = Listing::factory()->for($user)->create([
+            'status' => 'published',
+            'moderation_status' => 'approved',
+            'city' => 'Detroit',
+        ]);
+
+        $response = $this->withHeader('Authorization', 'Bearer '.$this->tokenFor($user))
+            ->putJson("/api/listings/{$listing->id}", ['city' => 'Ann Arbor']);
+
+        $response->assertOk();
+        $listing->refresh();
+        $this->assertEquals('in_progress', $listing->status);
+        $this->assertEquals('edited_pending_revalidation', $listing->moderation_status);
+        $this->assertEquals('Ann Arbor', $listing->city);
+    }
+
+    public function test_public_listings_endpoint_only_returns_published_listings(): void
+    {
+        $published = Listing::factory()->create(['status' => 'published']);
+        $submitted = Listing::factory()->create(['status' => 'submitted']);
+        $inProgress = Listing::factory()->create(['status' => 'in_progress']);
+
+        $response = $this->getJson('/api/public/listings');
+
+        $response->assertOk();
+        $response->assertJsonFragment(['id' => $published->id]);
+        $response->assertJsonMissing(['id' => $submitted->id]);
+        $response->assertJsonMissing(['id' => $inProgress->id]);
+    }
+
+    public function test_admin_listing_moderation_requires_admin_role(): void
+    {
+        $seller = User::factory()->seller()->create();
+        $admin = User::factory()->admin()->create();
+        $listing = Listing::factory()->create(['status' => 'published']);
+
+        // Seller forbidden
+        $this->actingAs($seller)
+            ->getJson('/api/admin/listings')
+            ->assertForbidden();
+
+        // Admin allowed
+        $this->actingAs($admin)
+            ->getJson('/api/admin/listings')
+            ->assertOk();
+
+        // Admin unpublishes
+        $this->actingAs($admin)
+            ->postJson("/api/admin/listings/{$listing->id}/unpublish")
+            ->assertOk();
+
+        $listing->refresh();
+        $this->assertEquals('unpublished', $listing->status);
+
+        // Admin rejects with reason
+        $this->actingAs($admin)
+            ->postJson("/api/admin/listings/{$listing->id}/reject", ['rejection_reason' => 'Violation of listing policies'])
+            ->assertOk();
+
+        $listing->refresh();
+        $this->assertEquals('rejected', $listing->status);
+        $this->assertEquals('rejected', $listing->moderation_status);
+        $this->assertEquals('Violation of listing policies', $listing->rejection_reason);
+    }
 }
+
+

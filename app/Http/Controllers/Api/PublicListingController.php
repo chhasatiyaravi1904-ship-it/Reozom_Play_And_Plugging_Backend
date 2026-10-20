@@ -15,11 +15,13 @@ class PublicListingController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        // Assuming 'submitted' or 'active' listings are public.
-        // We'll use 'submitted' since the previous audit saw 'status' => 'submitted'.
-        $query = Listing::with(['answers', 'images' => function ($query) {
-            $query->where('is_public', true);
-        }])->where('status', 'submitted')->latest();
+        // Approved Rule: Public listings must be published. Draft, submitted,
+        // or unpublished listings are excluded from public discovery.
+        $query = Listing::published()
+            ->with(['answers', 'images' => function ($query) {
+                $query->where('is_public', true);
+            }])
+            ->latest();
         
         // Basic pagination
         $listings = $query->paginate(15);
@@ -45,8 +47,8 @@ class PublicListingController extends Controller
             $query->where('is_public', true);
         }]);
 
-        // Only allow submitted listings to be viewed publicly
-        if ($listing->status !== 'submitted') {
+        // Only allow published listings to be viewed publicly
+        if (! $listing->isPublished()) {
             return response()->json([
                 'success' => false,
                 'message' => 'Listing not found or not active.'

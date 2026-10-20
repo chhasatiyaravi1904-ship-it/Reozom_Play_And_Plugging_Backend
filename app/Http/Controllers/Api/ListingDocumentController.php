@@ -9,30 +9,88 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Storage;
-use Symfony\Component\HttpFoundation\StreamedResponse;
+use Illuminate\Validation\Rule;
 
 class ListingDocumentController extends Controller
 {
-    public function index(Request $request, Listing $listing): JsonResponse
+    /**
+     * Resolve document requirements for this listing.
+     * Can be configured via workflow snapshot or platform default configuration.
+     */
+    private function resolveRequirements(Listing $listing): array
     {
-        $this->authorizeOwner($request, $listing);
+        $snapshot = $listing->workflow_snapshot ?? [];
+        $configuredDocs = [];
 
-        // Mocked requirements mapping to real DB uploaded files
-        $requirements = [
+        // Check if workflow snapshot explicitly defines required documents
+        foreach ($snapshot as $step) {
+            if (($step['type'] ?? '') === 'documents' || str_contains($step['id'] ?? '', 'document')) {
+                foreach ($step['sections'] ?? [] as $section) {
+                    foreach ($section['fields'] ?? [] as $field) {
+                        if (($field['type'] ?? '') === 'file') {
+                            $configuredDocs[] = [
+                                'id' => $field['id'],
+                                'label' => $field['label'] ?? $field['name'],
+                                'description' => $field['helpText'] ?? 'Upload required documentation.',
+                                'required' => (bool) ($field['required'] ?? false),
+                            ];
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!empty($configuredDocs)) {
+            return $configuredDocs;
+        }
+
+        // Standard configurable platform requirements
+        return [
             [
                 'id' => 'deed',
                 'label' => 'Property Deed',
-                'description' => 'A copy of the property deed showing ownership.',
+                'description' => 'A recorded copy of the property deed verifying current ownership.',
                 'required' => true,
             ],
             [
                 'id' => 'id_proof',
-                'label' => 'Photo ID',
-                'description' => 'A valid government-issued photo ID.',
+                'label' => 'Government Photo ID',
+                'description' => 'A valid government-issued photo ID of the property owner.',
                 'required' => true,
-            ]
+            ],
+            [
+                'id' => 'tax_record',
+                'label' => 'Recent Property Tax Bill',
+                'description' => 'Latest municipal property tax assessment or bill.',
+                'required' => false,
+            ],
+            [
+                'id' => 'hoa_rules',
+                'label' => 'HOA / Condominium Bylaws',
+                'description' => 'HOA rules, bylaws, and financial reserve summary if applicable.',
+                'required' => false,
+            ],
         ];
+    }
 
+    /**
+     * Helper to retrieve list of strictly required document type IDs for a listing.
+     */
+    public static function getRequiredDocumentTypes(Listing $listing): array
+    {
+        $instance = new self();
+        $requirements = $instance->resolveRequirements($listing);
+        return array_values(array_map(
+            fn ($r) => $r['id'],
+            array_filter($requirements, fn ($r) => !empty($r['required']))
+        ));
+    }
+
+    public function index(Request $request, Listing $listing): JsonResponse
+    {
+        Gate::authorize('view', $listing);
+
+        $requirements = $this->resolveRequirements($listing);
         $documents = $listing->documents()->get()->keyBy('type');
 
         $response = array_map(function ($req) use ($documents) {
@@ -40,10 +98,12 @@ class ListingDocumentController extends Controller
             return [
                 'id' => $req['id'],
                 'label' => $req['label'],
+                'description' => $req['description'] ?? '',
                 'required' => $req['required'],
                 'status' => $uploaded ? 'uploaded' : 'pending',
                 'fileName' => $uploaded ? $uploaded->original_name : null,
                 'uploadedAt' => $uploaded ? $uploaded->created_at->toIso8601String() : null,
+                'fileSize' => $uploaded ? $uploaded->size : null,
             ];
         }, $requirements);
 
@@ -52,10 +112,13 @@ class ListingDocumentController extends Controller
 
     public function store(Request $request, Listing $listing): JsonResponse
     {
-        $this->authorizeOwner($request, $listing);
+        Gate::authorize('update', $listing);
+
+        $requirements = $this->resolveRequirements($listing);
+        $allowedIds = array_column($requirements, 'id');
 
         $request->validate([
-            'document_id' => ['required', 'string', 'in:deed,id_proof'],
+            'document_id' => ['required', 'string', Rule::in($allowedIds)],
             'file' => ['required', 'file', 'mimes:pdf,jpg,jpeg,png,doc,docx', 'max:10240'], // 10MB max
         ]);
 
@@ -87,6 +150,14 @@ class ListingDocumentController extends Controller
             'size' => $file->getSize(),
         ]);
 
+        // Approved Rule: Editing/modifying a published listing unpublishes it until re-verified
+        if ($listing->status === 'published') {
+            $listing->update([
+                'status' => 'in_progress',
+                'moderation_status' => 'edited_pending_revalidation',
+            ]);
+        }
+
         return api_success([
             'id' => $document->type,
             'fileName' => $document->original_name,
@@ -96,7 +167,7 @@ class ListingDocumentController extends Controller
 
     public function download(Request $request, Listing $listing, $documentId)
     {
-        $this->authorizeOwner($request, $listing);
+        Gate::authorize('view', $listing);
 
         $document = $listing->documents()->where('type', $documentId)->firstOrFail();
 
@@ -113,7 +184,7 @@ class ListingDocumentController extends Controller
 
     public function destroy(Request $request, Listing $listing, $documentId): JsonResponse
     {
-        $this->authorizeOwner($request, $listing);
+        Gate::authorize('update', $listing);
 
         $document = $listing->documents()->where('type', $documentId)->firstOrFail();
 
@@ -123,11 +194,13 @@ class ListingDocumentController extends Controller
 
         $document->delete();
 
-        return api_success(null, 'Document deleted.');
-    }
+        if ($listing->status === 'published') {
+            $listing->update([
+                'status' => 'in_progress',
+                'moderation_status' => 'edited_pending_revalidation',
+            ]);
+        }
 
-    private function authorizeOwner(Request $request, Listing $listing): void
-    {
-        Gate::allowIf(fn () => $listing->user_id === $request->user()->id);
+        return api_success(null, 'Document deleted.');
     }
 }

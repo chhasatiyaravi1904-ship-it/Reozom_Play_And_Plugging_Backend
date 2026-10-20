@@ -100,6 +100,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::controller(\App\Http\Controllers\Api\ListingWorkflowController::class)->prefix('listings')->group(function () {
         Route::get('{listing}/workflow', 'show')->name('listings.workflow.show');
         Route::post('{listing}/steps/{step}', 'submitStep')->name('listings.workflow.step');
+        Route::get('{listing}/disclosures', 'getDisclosures')->name('listings.disclosures.get');
+        Route::post('{listing}/disclosures', 'saveDisclosures')->name('listings.disclosures.save');
     });
 
     Route::controller(\App\Http\Controllers\Api\ListingDocumentController::class)->prefix('listings')->group(function () {
@@ -119,7 +121,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::controller(StateController::class)->prefix('states')->group(function () {
         Route::get('/', 'index')->name('states.index');
-        Route::get('{state_id}', 'show')->name('states.show');
+        Route::get('{state}', 'show')->name('states.show');
 
         Route::middleware('permission:manage-states')->group(function () {
             Route::post('/', 'store')->name('states.store');
@@ -188,7 +190,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('{package}/select', 'select')->name('packages.select');
     });
 
-    Route::prefix('admin')->group(function () {
+    Route::prefix('admin')->middleware('user.role:admin')->group(function () {
         Route::controller(UserController::class)->prefix('users')->group(function () {
             Route::get('/', 'index')->name('users.index');
             Route::get('{user}', 'show')->name('users.show');
@@ -199,7 +201,6 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::delete('{user}', 'destroy')->name('users.destroy');
             });
         });
-
         Route::controller(AdminPackageController::class)->prefix('packages')->group(function () {
             Route::get('permissions', 'permissions')->name('admin.packages.permissions');
             Route::get('/', 'index')->name('admin.packages.index');
@@ -212,11 +213,16 @@ Route::middleware('auth:sanctum')->group(function () {
             });
         });
 
-
-
+        Route::controller(\App\Http\Controllers\Api\Admin\AdminListingController::class)->prefix('listings')->group(function () {
+            Route::get('/', 'index')->name('admin.listings.index');
+            Route::get('{listing}', 'show')->name('admin.listings.show');
+            Route::post('{listing}/publish', 'publish')->name('admin.listings.publish');
+            Route::post('{listing}/unpublish', 'unpublish')->name('admin.listings.unpublish');
+            Route::post('{listing}/reject', 'reject')->name('admin.listings.reject');
+        });
     });
 
-    Route::prefix('agent')->group(function () {
+    Route::prefix('agent')->middleware('user.role:agent,admin')->group(function () {
         Route::controller(\App\Http\Controllers\Api\ServicePackageController::class)->prefix('service-packages')->group(function () {
             Route::get('/', 'index')->name('agent.service-packages.index');
             Route::get('{servicePackage}', 'show')->name('agent.service-packages.show');

@@ -14,14 +14,9 @@ use Illuminate\Support\Str;
 
 class ListingImageController extends Controller
 {
-    private function authorizeOwner(Request $request, Listing $listing): void
-    {
-        Gate::allowIf(fn () => $listing->user_id === $request->user()->id);
-    }
-
     public function index(Request $request, Listing $listing): JsonResponse
     {
-        $this->authorizeOwner($request, $listing);
+        Gate::authorize('view', $listing);
 
         $images = $listing->images()->orderBy('sort_order')->get();
 
@@ -33,7 +28,7 @@ class ListingImageController extends Controller
 
     public function store(Request $request, Listing $listing): JsonResponse
     {
-        $this->authorizeOwner($request, $listing);
+        Gate::authorize('update', $listing);
 
         // Allow up to 20 images in total.
         if ($listing->images()->count() >= 20) {
@@ -77,7 +72,7 @@ class ListingImageController extends Controller
 
     public function update(Request $request, Listing $listing, ListingImage $image): JsonResponse
     {
-        $this->authorizeOwner($request, $listing);
+        Gate::authorize('update', $listing);
 
         if ($image->listing_id !== $listing->id) {
             return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
@@ -99,7 +94,7 @@ class ListingImageController extends Controller
 
     public function reorder(Request $request, Listing $listing): JsonResponse
     {
-        $this->authorizeOwner($request, $listing);
+        Gate::authorize('update', $listing);
 
         $validated = $request->validate([
             'image_ids' => 'required|array',
@@ -120,7 +115,7 @@ class ListingImageController extends Controller
 
     public function setPrimary(Request $request, Listing $listing, ListingImage $image): JsonResponse
     {
-        $this->authorizeOwner($request, $listing);
+        Gate::authorize('update', $listing);
 
         if ($image->listing_id !== $listing->id) {
             return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
@@ -140,7 +135,7 @@ class ListingImageController extends Controller
 
     public function destroy(Request $request, Listing $listing, ListingImage $image): JsonResponse
     {
-        $this->authorizeOwner($request, $listing);
+        Gate::authorize('update', $listing);
 
         if ($image->listing_id !== $listing->id) {
             return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);

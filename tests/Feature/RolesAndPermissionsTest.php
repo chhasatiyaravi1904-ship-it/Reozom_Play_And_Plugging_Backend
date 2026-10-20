@@ -51,6 +51,13 @@ class RolesAndPermissionsTest extends TestCase
         ]);
 
         $response->assertOk();
-        $response->assertJsonPath('data.user.permissions', ['manage-states']);
+
+        $verifyResponse = $this->postJson('/api/auth/verify-2fa', [
+            'email' => $user->email,
+            'code' => '123456',
+        ]);
+
+        $verifyResponse->assertOk();
+        $verifyResponse->assertJsonPath('data.user.permissions', ['manage-states']);
     }
 }

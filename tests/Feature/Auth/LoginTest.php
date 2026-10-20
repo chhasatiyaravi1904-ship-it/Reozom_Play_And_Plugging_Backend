@@ -24,8 +24,16 @@ class LoginTest extends TestCase
         ]);
 
         $response->assertOk();
-        $response->assertJsonPath('data.user.email', $user->email);
-        $response->assertJsonStructure(['data' => ['token', 'user']]);
+        $response->assertJsonPath('data.requires_2fa', true);
+
+        $verify = $this->postJson('/api/auth/verify-2fa', [
+            'email' => 'jane@example.com',
+            'code' => '123456',
+        ]);
+
+        $verify->assertOk();
+        $verify->assertJsonPath('data.user.email', $user->email);
+        $verify->assertJsonStructure(['data' => ['token', 'user']]);
     }
 
     public function test_login_fails_with_invalid_password(): void

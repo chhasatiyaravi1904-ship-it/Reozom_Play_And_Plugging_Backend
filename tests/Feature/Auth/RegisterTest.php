@@ -14,17 +14,21 @@ class RegisterTest extends TestCase
     public function test_user_can_register_with_valid_data(): void
     {
         $response = $this->postJson('/api/auth/register', [
-            'fullName' => 'Jane Doe',
+            'userType' => 'seller',
+            'firstName' => 'Jane',
+            'lastName' => 'Doe',
             'email' => 'jane@example.com',
             'phone' => '555-123-4567',
+            'streetAddress' => '123 Main St',
+            'city' => 'Metropolis',
+            'state' => 'NY',
+            'zip' => '10001',
             'password' => 'password',
             'passwordConfirmation' => 'password',
         ]);
 
         $response->assertCreated();
         $response->assertJsonPath('data.user.email', 'jane@example.com');
-        // Public registration always creates a seller — agent/admin accounts
-        // are provisioned separately, not through open registration.
         $response->assertJsonPath('data.user.role', UserRole::Seller->value);
         $response->assertJsonStructure(['data' => ['token', 'user']]);
 
@@ -39,9 +43,15 @@ class RegisterTest extends TestCase
         User::factory()->create(['email' => 'jane@example.com']);
 
         $response = $this->postJson('/api/auth/register', [
-            'fullName' => 'Jane Doe',
+            'userType' => 'seller',
+            'firstName' => 'Jane',
+            'lastName' => 'Doe',
             'email' => 'jane@example.com',
             'phone' => '555-123-4567',
+            'streetAddress' => '123 Main St',
+            'city' => 'Metropolis',
+            'state' => 'NY',
+            'zip' => '10001',
             'password' => 'password',
             'passwordConfirmation' => 'password',
         ]);
@@ -53,9 +63,15 @@ class RegisterTest extends TestCase
     public function test_registration_fails_when_passwords_do_not_match(): void
     {
         $response = $this->postJson('/api/auth/register', [
-            'fullName' => 'Jane Doe',
+            'userType' => 'seller',
+            'firstName' => 'Jane',
+            'lastName' => 'Doe',
             'email' => 'jane@example.com',
             'phone' => '555-123-4567',
+            'streetAddress' => '123 Main St',
+            'city' => 'Metropolis',
+            'state' => 'NY',
+            'zip' => '10001',
             'password' => 'password',
             'passwordConfirmation' => 'different-password',
         ]);

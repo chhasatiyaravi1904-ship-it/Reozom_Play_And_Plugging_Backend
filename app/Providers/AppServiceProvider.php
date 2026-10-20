@@ -21,6 +21,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        \Illuminate\Support\Facades\Gate::policy(\App\Models\Listing::class, \App\Policies\ListingPolicy::class);
+
         ResetPassword::createUrlUsing(function (object $notifiable, string $token) {
             return config('app.frontend_url')."/auth/reset-password?token={$token}&email={$notifiable->getEmailForPasswordReset()}";
         });

@@ -26,6 +26,7 @@ class ServicePackageZipTest extends TestCase
         $this->package = Package::create([
             'name' => 'Agent Pro',
             'slug' => 'agent-pro',
+            'role_name' => 'agent-pro',
             'price' => 50,
             'duration_days' => 30,
             'is_active' => true,
@@ -38,9 +39,9 @@ class ServicePackageZipTest extends TestCase
             'expires_at' => now()->addDays(30),
         ]);
         
-        $this->zip1 = ZipCode::create(['code' => '48301', 'is_active' => true]);
-        $this->zip2 = ZipCode::create(['code' => '48302', 'is_active' => true]);
-        $this->zip3 = ZipCode::create(['code' => '48303', 'is_active' => true]);
+        $this->zip1 = ZipCode::factory()->create(['code' => '48301', 'is_active' => true]);
+        $this->zip2 = ZipCode::factory()->create(['code' => '48302', 'is_active' => true]);
+        $this->zip3 = ZipCode::factory()->create(['code' => '48303', 'is_active' => true]);
     }
 
     public function test_agent_can_link_and_remove_zip_codes()

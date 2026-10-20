@@ -22,6 +22,7 @@ use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use App\Mail\TwoFactorCodeMail;
+use Spatie\Permission\Models\Role;
 
 class AuthController extends Controller
 {
@@ -92,7 +93,8 @@ class AuthController extends Controller
                 'expires_at' => now()->addDays($package->duration_days),
             ]);
 
-            $user->assignRole($package->role_name);
+            $role = Role::findOrCreate($package->role_name, 'web');
+            $user->assignRole($role);
 
             $this->packageActivityLogger->log($user, $package->id, null, 'purchased', $request);
         });
