@@ -22,10 +22,56 @@ class PublicListingController extends Controller
                 $query->where('is_public', true);
             }])
             ->latest();
-        
-        // Basic pagination
-        $listings = $query->paginate(15);
-        
+
+        // Search text filter
+        if ($search = $request->input('search')) {
+            $query->where(function ($q) use ($search) {
+                $q->where('address', 'like', "%{$search}%")
+                  ->orWhere('city', 'like', "%{$search}%")
+                  ->orWhere('state', 'like', "%{$search}%")
+                  ->orWhere('zip', 'like', "%{$search}%")
+                  ->orWhere('reference_code', 'like', "%{$search}%")
+                  ->orWhereHas('answers', function ($ansQ) use ($search) {
+                      $ansQ->where('values', 'like', "%{$search}%");
+                  });
+            });
+        }
+
+        // Location specific filter
+        if ($location = $request->input('location')) {
+            $query->where(function ($q) use ($location) {
+                $q->where('city', 'like', "%{$location}%")
+                  ->orWhere('state', 'like', "%{$location}%")
+                  ->orWhere('zip', 'like', "%{$location}%")
+                  ->orWhere('address', 'like', "%{$location}%");
+            });
+        }
+
+        if ($city = $request->input('city')) {
+            $query->where('city', 'like', "%{$city}%");
+        }
+
+        if ($state = $request->input('state')) {
+            $query->where('state', strtoupper($state));
+        }
+
+        if ($zip = $request->input('zip')) {
+            $query->where('zip', 'like', "{$zip}%");
+        }
+
+        // Property type filter
+        if ($propertyType = $request->input('property_type')) {
+            if ($propertyType !== 'all') {
+                $query->whereHas('answers', function ($ansQ) use ($propertyType) {
+                    $ansQ->where('values', 'like', '%"property_type":"' . $propertyType . '"%')
+                         ->orWhere('values', 'like', '%"property_type": "' . $propertyType . '"%');
+                });
+            }
+        }
+
+        $perPage = max(1, min((int) $request->input('per_page', 12), 50));
+        $listings = $query->paginate($perPage);
+
         return response()->json([
             'success' => true,
             'data' => PublicListingResource::collection($listings->items()),

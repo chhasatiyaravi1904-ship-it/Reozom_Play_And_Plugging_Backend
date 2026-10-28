@@ -19,16 +19,34 @@ class ListingWorkflowService
      */
     public function resolveListingProcess(ServicePackage $servicePackage): ListingProcess
     {
-        // Must belong to the selected Service Package and its Agent, and must be active.
+        // 1. Direct match for process linked to this Service Package
         $process = ListingProcess::where('service_package_id', $servicePackage->id)
-            ->where('agent_id', $servicePackage->agent_id)
             ->where('status', 'active')
             ->first();
 
+        // 2. Direct match for Service Package and its Agent
+        if (!$process && $servicePackage->agent_id) {
+            $process = ListingProcess::where('service_package_id', $servicePackage->id)
+                ->where('agent_id', $servicePackage->agent_id)
+                ->where('status', 'active')
+                ->first();
+        }
+
+        // 3. Fallback to default active Residential process
         if (!$process) {
             $process = ListingProcess::whereNull('agent_id')
                 ->where('type', 'default')
                 ->where('status', 'active')
+                ->where('name', 'like', '%Residential%')
+                ->first();
+        }
+
+        // 4. Any default active process with non-empty config
+        if (!$process) {
+            $process = ListingProcess::whereNull('agent_id')
+                ->where('type', 'default')
+                ->where('status', 'active')
+                ->whereNotNull('config')
                 ->first();
         }
 

@@ -22,5 +22,6 @@ class DatabaseSeeder extends Seeder
         $this->call(CitySeeder::class);
         $this->call(ZipCodeSeeder::class);
         $this->call(ListingProcessSeeder::class);
+        $this->call(MichiganListingProcessSeeder::class);
     }
 }

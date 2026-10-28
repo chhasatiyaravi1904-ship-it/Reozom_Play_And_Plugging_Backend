@@ -24,3 +24,13 @@ if (! function_exists('api_error')) {
         return ApiResponse::error($message, $status, $errors);
     }
 }
+
+// Autoloader for Smalot\PdfParser if needed
+spl_autoload_register(function ($class) {
+    if (str_starts_with($class, 'Smalot\\PdfParser\\')) {
+        $file = __DIR__ . '/../vendor/smalot/pdfparser/src/' . str_replace('\\', '/', $class) . '.php';
+        if (file_exists($file)) {
+            require_once $file;
+        }
+    }
+});

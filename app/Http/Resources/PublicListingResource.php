@@ -28,6 +28,7 @@ class PublicListingResource extends JsonResource
             'reference_code' => $this->reference_code,
             'status' => $this->status,
             'address' => [
+                'street' => $this->address,
                 'city' => $this->city,
                 'state' => $this->state,
                 'zip' => $this->zip,

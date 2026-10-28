@@ -108,6 +108,16 @@ class Listing extends Model
         return $this->hasMany(ListingDocument::class);
     }
 
+    public function statusHistories()
+    {
+        return $this->hasMany(ListingStatusHistory::class)->orderBy('created_at', 'desc');
+    }
+
+    public function offers()
+    {
+        return $this->hasMany(ListingOffer::class)->orderBy('created_at', 'desc');
+    }
+
     public function getPublicListingData(): array
     {
         $systemStepId = 'system_public_info';

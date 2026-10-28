@@ -254,6 +254,28 @@ class ListingTest extends TestCase
         $this->assertEquals('rejected', $listing->moderation_status);
         $this->assertEquals('Violation of listing policies', $listing->rejection_reason);
     }
+
+    public function test_image_mutation_on_published_listing_triggers_unpublishing(): void
+    {
+        \Illuminate\Support\Facades\Storage::fake('public');
+        $user = User::factory()->create();
+        $listing = Listing::factory()->for($user)->create([
+            'status' => 'published',
+            'moderation_status' => 'approved',
+        ]);
+
+        $file = \Illuminate\Http\UploadedFile::fake()->image('house.jpg');
+
+        $response = $this->withHeader('Authorization', 'Bearer '.$this->tokenFor($user))
+            ->postJson("/api/listings/{$listing->id}/images", [
+                'images' => [$file],
+            ]);
+
+        $response->assertStatus(201);
+        $listing->refresh();
+        $this->assertEquals('in_progress', $listing->status);
+        $this->assertEquals('edited_pending_revalidation', $listing->moderation_status);
+    }
 }
 
 

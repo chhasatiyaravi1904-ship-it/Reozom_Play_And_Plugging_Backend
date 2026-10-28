@@ -18,7 +18,21 @@ class ListingDocument extends Model
         'path',
         'mime_type',
         'size',
+        'status',
+        'reviewed_by',
+        'reviewed_at',
+        'admin_notes',
+        'signed_at',
+        'signed_by',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'reviewed_at' => 'datetime',
+            'signed_at' => 'datetime',
+        ];
+    }
 
     public function listing(): BelongsTo
     {
@@ -28,5 +42,10 @@ class ListingDocument extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function reviewer(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'reviewed_by');
     }
 }

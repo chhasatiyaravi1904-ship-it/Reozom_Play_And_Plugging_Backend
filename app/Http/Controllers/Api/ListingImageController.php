@@ -63,11 +63,23 @@ class ListingImageController extends Controller
             $uploadedImages[] = $image;
         }
 
+        $this->handlePublishedMutation($listing);
+
         return response()->json([
             'success' => true,
             'data' => $uploadedImages,
             'message' => 'Images uploaded successfully.'
         ], 201);
+    }
+
+    private function handlePublishedMutation(Listing $listing): void
+    {
+        if ($listing->status === 'published') {
+            $listing->update([
+                'status' => 'in_progress',
+                'moderation_status' => 'edited_pending_revalidation',
+            ]);
+        }
     }
 
     public function update(Request $request, Listing $listing, ListingImage $image): JsonResponse
@@ -84,6 +96,7 @@ class ListingImageController extends Controller
         ]);
 
         $image->update($validated);
+        $this->handlePublishedMutation($listing);
 
         return response()->json([
             'success' => true,
@@ -107,6 +120,8 @@ class ListingImageController extends Controller
             ]);
         }
 
+        $this->handlePublishedMutation($listing);
+
         return response()->json([
             'success' => true,
             'message' => 'Images reordered successfully.'
@@ -127,6 +142,8 @@ class ListingImageController extends Controller
         // Set the requested one
         $image->update(['is_primary' => true]);
 
+        $this->handlePublishedMutation($listing);
+
         return response()->json([
             'success' => true,
             'message' => 'Primary image updated successfully.'
@@ -146,6 +163,8 @@ class ListingImageController extends Controller
         Storage::disk('public')->delete($path);
 
         $image->delete();
+
+        $this->handlePublishedMutation($listing);
 
         return response()->json([
             'success' => true,

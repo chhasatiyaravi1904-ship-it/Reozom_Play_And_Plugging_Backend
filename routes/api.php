@@ -104,11 +104,43 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('{listing}/disclosures', 'saveDisclosures')->name('listings.disclosures.save');
     });
 
+    Route::controller(\App\Http\Controllers\Api\ListingStatusController::class)->prefix('listings')->group(function () {
+        Route::get('{listing}/status-history', 'history')->name('listings.status-history');
+        Route::post('{listing}/transition', 'transition')->name('listings.transition');
+    });
+
+    Route::controller(\App\Http\Controllers\Api\ListingDisclosureController::class)->prefix('listings')->group(function () {
+        Route::get('{listing}/disclosures', 'index')->name('listings.disclosures.index');
+        Route::post('{listing}/disclosures', 'store')->name('listings.disclosures.store');
+    });
+
     Route::controller(\App\Http\Controllers\Api\ListingDocumentController::class)->prefix('listings')->group(function () {
         Route::get('{listing}/documents', 'index')->name('listings.documents.index');
         Route::post('{listing}/documents', 'store')->name('listings.documents.store');
         Route::delete('{listing}/documents/{document}', 'destroy')->name('listings.documents.destroy');
         Route::get('{listing}/documents/{document}/download', 'download')->name('listings.documents.download');
+        Route::get('{listing}/documents/{document}/preview', 'preview')->name('listings.documents.preview');
+        Route::post('{listing}/documents/{document}/sign', 'sign')->name('listings.documents.sign');
+        Route::put('{listing}/documents/{document}/review', 'review')->name('listings.documents.review');
+        Route::get('{listing}/documents-download-all', 'downloadAll')->name('listings.documents.download-all');
+    });
+
+    Route::controller(\App\Http\Controllers\Api\OfferController::class)->group(function () {
+        // Buyer offer actions
+        Route::post('listings/{listing}/offers', 'store')->name('listings.offers.store');
+        Route::get('buyer/offers', 'myOffers')->name('buyer.offers.index');
+        Route::get('buyer/offers/{offer}', 'showBuyerOffer')->name('buyer.offers.show');
+        Route::post('offers/{offer}/withdraw', 'withdraw')->name('offers.withdraw');
+
+        // Seller & participant negotiation actions
+        Route::get('listings/{listing}/offers', 'listingOffers')->name('listings.offers.index');
+        Route::get('seller/offers/{offer}', 'showSellerOffer')->name('seller.offers.show');
+        Route::post('offers/{offer}/counter', 'counter')->name('offers.counter');
+        Route::post('offers/{offer}/accept', 'accept')->name('offers.accept');
+        Route::post('offers/{offer}/reject', 'reject')->name('offers.reject');
+
+        // Offer document download
+        Route::get('offers/{offer}/documents/{document}/download', 'downloadDocument')->name('offers.documents.download');
     });
 
     Route::controller(\App\Http\Controllers\ListingProcessController::class)->prefix('listing-processes')->group(function () {
@@ -220,6 +252,9 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('{listing}/unpublish', 'unpublish')->name('admin.listings.unpublish');
             Route::post('{listing}/reject', 'reject')->name('admin.listings.reject');
         });
+
+        Route::get('offers', [\App\Http\Controllers\Api\OfferController::class, 'adminIndex'])->name('admin.offers.index');
+        Route::get('offers/{offer}', [\App\Http\Controllers\Api\OfferController::class, 'adminShow'])->name('admin.offers.show');
     });
 
     Route::prefix('agent')->middleware('user.role:agent,admin')->group(function () {
@@ -231,4 +266,17 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::delete('{servicePackage}', 'destroy')->name('agent.service-packages.destroy');
         });
     });
+
+    // EunoDoc E-Signature Flows
+    Route::controller(\App\Http\Controllers\Api\EunoSignController::class)->group(function () {
+        Route::post('listings/{listing}/euno-sign/initiate', 'initiateListingSigning')->name('listings.euno-sign.initiate');
+        Route::get('listings/{listing}/euno-sign/status', 'getListingSigningStatus')->name('listings.euno-sign.status');
+        Route::post('offers/{offer}/euno-sign/initiate', 'initiateOfferSigning')->name('offers.euno-sign.initiate');
+        Route::get('offers/{offer}/euno-sign/status', 'getOfferSigningStatus')->name('offers.euno-sign.status');
+        Route::get('euno-agreements/{agreement}/signed-doc', 'downloadSignedDocument')->name('euno-agreements.signed-doc');
+        Route::get('euno-agreements/{agreement}/audit', 'downloadAuditReport')->name('euno-agreements.audit');
+    });
 });
+
+// EunoDoc Webhook callback (unauthenticated)
+Route::post('euno/webhook', [\App\Http\Controllers\Api\EunoSignController::class, 'webhook'])->name('euno.webhook');

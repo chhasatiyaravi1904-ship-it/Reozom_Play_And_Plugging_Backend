@@ -87,12 +87,21 @@ class AdminListingController extends Controller
     /**
      * Approve and publish a listing.
      */
-    public function publish(Request $request, Listing $listing): JsonResponse
+    public function publish(Request $request, Listing $listing, \App\Services\ListingStatusService $statusService): JsonResponse
     {
         Gate::authorize('moderate', Listing::class);
 
+        $statusService->transition(
+            $listing,
+            'published',
+            $request->user(),
+            'admin',
+            'Approved and published by admin',
+            null,
+            true
+        );
+
         $listing->update([
-            'status' => 'published',
             'moderation_status' => 'approved',
             'moderated_by' => $request->user()->id,
             'moderated_at' => now(),
@@ -105,12 +114,21 @@ class AdminListingController extends Controller
     /**
      * Unpublish an active listing. Immediately removes it from public discovery.
      */
-    public function unpublish(Request $request, Listing $listing): JsonResponse
+    public function unpublish(Request $request, Listing $listing, \App\Services\ListingStatusService $statusService): JsonResponse
     {
         Gate::authorize('moderate', Listing::class);
 
+        $statusService->transition(
+            $listing,
+            'unpublished',
+            $request->user(),
+            'admin',
+            'Unpublished by admin',
+            null,
+            true
+        );
+
         $listing->update([
-            'status' => 'unpublished',
             'moderation_status' => 'unpublished_by_admin',
             'moderated_by' => $request->user()->id,
             'moderated_at' => now(),
@@ -122,7 +140,7 @@ class AdminListingController extends Controller
     /**
      * Reject a listing with required feedback/rejection reason.
      */
-    public function reject(Request $request, Listing $listing): JsonResponse
+    public function reject(Request $request, Listing $listing, \App\Services\ListingStatusService $statusService): JsonResponse
     {
         Gate::authorize('moderate', Listing::class);
 
@@ -130,8 +148,17 @@ class AdminListingController extends Controller
             'rejection_reason' => 'required|string|max:1000',
         ]);
 
+        $statusService->transition(
+            $listing,
+            'rejected',
+            $request->user(),
+            'admin',
+            $validated['rejection_reason'],
+            null,
+            true
+        );
+
         $listing->update([
-            'status' => 'rejected',
             'moderation_status' => 'rejected',
             'rejection_reason' => $validated['rejection_reason'],
             'moderated_by' => $request->user()->id,
