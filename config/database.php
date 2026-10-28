@@ -59,16 +59,12 @@ return [
             'prefix_indexes' => true,
             'strict' => true,
             'engine' => null,
-                // 'options' => extension_loaded('pdo_mysql') ? array_filter([
-                //     Mysql::ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
-                //     Mysql::ATTR_SSL_VERIFY_SERVER_CERT => false,
-                // ]) : [],
-            'options' => extension_loaded('pdo_mysql') ? array_filter([
-                PDO::MYSQL_ATTR_SSL_CA => env(
-                    'DB_SSL_CA',
-                    '/etc/ssl/certs/ca-certificates.crt'
-                ),
-            ]) : [],    
+            'options' => extension_loaded('pdo_mysql') ? [
+                PDO::MYSQL_ATTR_SSL_CA => env('DB_SSL_CA') && file_exists(env('DB_SSL_CA'))
+                    ? env('DB_SSL_CA')
+                    : base_path('isrgrootx1.pem'),
+                PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT => false,
+            ] : [],
         ],
 
         'mariadb' => [
