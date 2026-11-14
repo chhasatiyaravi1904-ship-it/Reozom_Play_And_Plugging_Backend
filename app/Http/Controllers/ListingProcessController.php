@@ -137,6 +137,37 @@ class ListingProcessController extends Controller
     }
 
     /**
+     * Get available active disclosures for linking with listing processes.
+     */
+    public function availableDisclosures(Request $request)
+    {
+        $state = $request->query('state_code');
+        $type = $request->query('property_type');
+
+        $query = \App\Models\PropertyDisclosure::active()->orderBy('order');
+
+        if ($state && $state !== 'ALL') {
+            $query->where(function ($q) use ($state) {
+                $q->whereNull('state_code')
+                  ->orWhere('state_code', '')
+                  ->orWhere('state_code', 'ALL')
+                  ->orWhere('state_code', strtoupper($state));
+            });
+        }
+
+        if ($type && $type !== 'all') {
+            $query->where(function ($q) use ($type) {
+                $q->whereNull('property_type')
+                  ->orWhere('property_type', '')
+                  ->orWhere('property_type', 'all')
+                  ->orWhere('property_type', strtolower($type));
+            });
+        }
+
+        return response()->json($query->get());
+    }
+
+    /**
      * Store a newly created resource in storage.
      */
     public function store(SaveListingProcessRequest $request)

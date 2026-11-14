@@ -24,6 +24,12 @@ class ListingDocument extends Model
         'admin_notes',
         'signed_at',
         'signed_by',
+        'signature_image',
+        'signature_type',
+        'initials_image',
+        'signer_ip',
+        'verification_code',
+        'audit_trail',
     ];
 
     protected function casts(): array
@@ -31,6 +37,7 @@ class ListingDocument extends Model
         return [
             'reviewed_at' => 'datetime',
             'signed_at' => 'datetime',
+            'audit_trail' => 'array',
         ];
     }
 

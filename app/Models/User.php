@@ -54,22 +54,39 @@ class User extends Authenticatable implements MustVerifyEmail
 
     public function isAdmin(): bool
     {
-        return $this->role === UserRole::Admin;
+        if ($this->role === UserRole::Admin) {
+            return true;
+        }
+
+        $roleVal = $this->role instanceof UserRole ? $this->role->value : (string) $this->role;
+        if (strtolower($roleVal) === 'admin') {
+            return true;
+        }
+
+        if (method_exists($this, 'hasRole')) {
+            try {
+                if ($this->hasRole('admin')) {
+                    return true;
+                }
+            } catch (\Throwable) {}
+        }
+
+        return false;
     }
 
     public function isAgent(): bool
     {
-        return $this->role === UserRole::Agent;
+        return $this->role === UserRole::Agent || ($this->role instanceof UserRole ? $this->role->value === 'agent' : (string) $this->role === 'agent');
     }
 
     public function isSeller(): bool
     {
-        return $this->role === UserRole::Seller;
+        return $this->role === UserRole::Seller || ($this->role instanceof UserRole ? $this->role->value === 'seller' : (string) $this->role === 'seller');
     }
 
     public function isBuyer(): bool
     {
-        return $this->role === UserRole::Buyer;
+        return $this->role === UserRole::Buyer || ($this->role instanceof UserRole ? $this->role->value === 'buyer' : (string) $this->role === 'buyer');
     }
 
     /**

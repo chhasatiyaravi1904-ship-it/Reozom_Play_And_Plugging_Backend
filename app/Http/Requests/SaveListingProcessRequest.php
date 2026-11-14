@@ -20,6 +20,8 @@ class SaveListingProcessRequest extends FormRequest
             'agent_id' => 'nullable|exists:users,id',
             'service_package_id' => 'nullable|exists:service_packages,id',
             'assigned_zips' => 'nullable|array',
+            'required_disclosures' => 'nullable|array',
+            'required_disclosures.*' => 'string',
             'config' => 'nullable|array',
 
             // Step Validation

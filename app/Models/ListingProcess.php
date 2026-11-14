@@ -17,12 +17,19 @@ class ListingProcess extends Model
         'service_package_id',
         'assigned_zips',
         'config',
+        'required_disclosures',
     ];
 
     protected $casts = [
         'assigned_zips' => 'array',
         'config' => 'array',
+        'required_disclosures' => 'array',
     ];
+
+    public function getRequiredDisclosures(): array
+    {
+        return $this->required_disclosures ?? ($this->config['required_disclosures'] ?? []);
+    }
 
     public function agent()
     {

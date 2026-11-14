@@ -64,7 +64,19 @@ class ListingPolicy
             return true;
         }
 
-        return $listing->user_id === $user->id;
+        if ($listing->user_id === $user->id) {
+            return true;
+        }
+
+        if ($user->isAgent() && $listing->servicePackage && $listing->servicePackage->agent_id === $user->id) {
+            return true;
+        }
+
+        if ($user->isAgent() && $listing->listingProcess && $listing->listingProcess->agent_id === $user->id) {
+            return true;
+        }
+
+        return false;
     }
 
     /**
@@ -76,7 +88,15 @@ class ListingPolicy
             return true;
         }
 
-        return $listing->user_id === $user->id;
+        if ($listing->user_id === $user->id) {
+            return true;
+        }
+
+        if ($user->isAgent() && $listing->servicePackage && $listing->servicePackage->agent_id === $user->id) {
+            return true;
+        }
+
+        return false;
     }
 
     /**
@@ -88,7 +108,19 @@ class ListingPolicy
             return true;
         }
 
-        return $listing->user_id === $user->id;
+        if ($listing->user_id === $user->id) {
+            return true;
+        }
+
+        if ($user->isAgent() && $listing->servicePackage && $listing->servicePackage->agent_id === $user->id) {
+            return true;
+        }
+
+        if ($user->isAgent() && $listing->listingProcess && $listing->listingProcess->agent_id === $user->id) {
+            return true;
+        }
+
+        return false;
     }
 
     /**

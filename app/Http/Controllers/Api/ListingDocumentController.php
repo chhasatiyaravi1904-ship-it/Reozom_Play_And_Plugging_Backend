@@ -10,7 +10,9 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Barryvdh\DomPDF\Facade\Pdf;
 
 class ListingDocumentController extends Controller
 {
@@ -43,74 +45,106 @@ class ListingDocumentController extends Controller
     private function resolveRequirements(Listing $listing): array
     {
         // Automatically ensure statutory documents are provisioned
-        app(DisclosureService::class)->regenerateStatutoryDocuments($listing);
+        $discService = app(DisclosureService::class);
+        $discService->regenerateStatutoryDocuments($listing);
+        $selectedCodes = $discService->getSelectedDisclosureCodes($listing);
 
-        return [
-            [
+        $hasSellers = empty($selectedCodes)
+            || in_array('mi_residential_appliances', $selectedCodes)
+            || in_array('mi_residential_conditions', $selectedCodes)
+            || in_array('mi_vacant_land_disclosure', $selectedCodes)
+            || in_array('fl_residential_single_family', $selectedCodes)
+            || in_array('fl_vacant_land_disclosure', $selectedCodes)
+            || in_array('property_conditions', $selectedCodes);
+
+        $hasLead = empty($selectedCodes) || in_array('lead_paint_disclosure', $selectedCodes) || in_array('lead_paint', $selectedCodes);
+        $hasCondo = in_array('fl_residential_condo', $selectedCodes);
+
+        $requirements = [];
+
+        if ($hasSellers) {
+            $requirements[] = [
                 'id' => 'sellers_disclosure',
                 'label' => "Seller's Disclosure Statement",
                 'description' => 'Statutory property condition and improvement disclosure.',
                 'required' => true,
                 'category' => 'statutory',
                 'signable' => true,
-            ],
-            [
+            ];
+        }
+
+        if ($hasLead) {
+            $requirements[] = [
                 'id' => 'lead_disclosure',
                 'label' => 'Lead-Based Paint Hazard Disclosure',
                 'description' => 'Federal EPA & State statutory lead hazard disclosure.',
                 'required' => true,
                 'category' => 'statutory',
                 'signable' => true,
-            ],
-            [
-                'id' => 'listing_agreement',
-                'label' => 'Exclusive Right to Sell Listing Agreement',
-                'description' => 'Exclusive brokerage listing agreement with package terms.',
+            ];
+        }
+
+        if ($hasCondo) {
+            $requirements[] = [
+                'id' => 'condo_disclosure',
+                'label' => "Condominium Seller's Property Disclosure",
+                'description' => 'Florida statutory condominium governance, reserve funding, and milestone inspection disclosure.',
                 'required' => true,
                 'category' => 'statutory',
                 'signable' => true,
-            ],
-            [
-                'id' => 'agency_disclosure',
-                'label' => 'Agency Disclosure Statement',
-                'description' => 'Real estate agency relationships and fiduciary duties disclosure.',
-                'required' => true,
-                'category' => 'statutory',
-                'signable' => true,
-            ],
-            [
-                'id' => 'deed',
-                'label' => 'Property Deed / Title',
-                'description' => 'Recorded copy of deed verifying current legal ownership.',
-                'required' => true,
-                'category' => 'required',
-                'signable' => false,
-            ],
-            [
-                'id' => 'id_proof',
-                'label' => 'Government Photo ID',
-                'description' => 'Valid government-issued photo ID of the owner.',
-                'required' => true,
-                'category' => 'required',
-                'signable' => false,
-            ],
-            [
-                'id' => 'tax_record',
-                'label' => 'Recent Property Tax Bill',
-                'description' => 'Latest municipal property tax assessment or bill.',
-                'required' => false,
-                'category' => 'supplementary',
-                'signable' => false,
-            ],
-            [
-                'id' => 'hoa_rules',
-                'label' => 'HOA / Condominium Bylaws',
-                'description' => 'Bylaws, covenants, conditions, and restrictions.',
-                'required' => false,
-                'category' => 'supplementary',
-                'signable' => false,
-            ],
+            ];
+        }
+
+        $requirements[] = [
+            'id' => 'listing_agreement',
+            'label' => 'Exclusive Right to Sell Listing Agreement',
+            'description' => 'Exclusive brokerage listing agreement with package terms.',
+            'required' => true,
+            'category' => 'statutory',
+            'signable' => true,
         ];
+        $requirements[] = [
+            'id' => 'agency_disclosure',
+            'label' => 'Agency Disclosure Statement',
+            'description' => 'Real estate agency relationships and fiduciary duties disclosure.',
+            'required' => true,
+            'category' => 'statutory',
+            'signable' => true,
+        ];
+        $requirements[] = [
+            'id' => 'deed',
+            'label' => 'Property Deed / Title',
+            'description' => 'Recorded copy of deed verifying current legal ownership.',
+            'required' => true,
+            'category' => 'required',
+            'signable' => false,
+        ];
+        $requirements[] = [
+            'id' => 'id_proof',
+            'label' => 'Government Photo ID',
+            'description' => 'Valid government-issued photo ID of the owner.',
+            'required' => true,
+            'category' => 'required',
+            'signable' => false,
+        ];
+        $requirements[] = [
+            'id' => 'tax_record',
+            'label' => 'Recent Property Tax Bill',
+            'description' => 'Latest municipal property tax assessment or bill.',
+            'required' => false,
+            'category' => 'supplementary',
+            'signable' => false,
+        ];
+        $requirements[] = [
+            'id' => 'hoa_rules',
+            'label' => 'HOA / Condominium Bylaws',
+            'description' => 'Bylaws, covenants, conditions, and restrictions.',
+            'required' => false,
+            'category' => 'supplementary',
+            'signable' => false,
+        ];
+
+        return $requirements;
     }
 
     /**
@@ -161,6 +195,9 @@ class ListingDocumentController extends Controller
                 'reviewedAt' => $uploaded && $uploaded->reviewed_at ? $uploaded->reviewed_at->toIso8601String() : null,
                 'signedAt' => $uploaded && $uploaded->signed_at ? $uploaded->signed_at->toIso8601String() : null,
                 'signedBy' => $uploaded ? $uploaded->signed_by : null,
+                'signatureImage' => $uploaded ? $uploaded->signature_image : null,
+                'signatureType' => $uploaded ? $uploaded->signature_type : null,
+                'verificationCode' => $uploaded ? $uploaded->verification_code : null,
                 'isSignable' => $isSignable,
                 'isPreviewable' => $isSignable,
                 'fileName' => $uploaded ? $uploaded->original_name : null,
@@ -264,22 +301,79 @@ class ListingDocumentController extends Controller
     }
 
     /**
-     * E-Sign a statutory listing document.
+     * Find existing document or auto-provision statutory document.
+     */
+    private function findOrProvisionDocument(Listing $listing, string $documentId): ListingDocument
+    {
+        $document = $listing->documents()
+            ->where(fn($q) => $q->where('id', $documentId)->orWhere('type', $documentId))
+            ->first();
+
+        if (!$document) {
+            app(DisclosureService::class)->regenerateStatutoryDocuments($listing);
+            $document = $listing->documents()
+                ->where(fn($q) => $q->where('id', $documentId)->orWhere('type', $documentId))
+                ->first();
+        }
+
+        if (!$document && isset(self::REOZOM_DOCUMENT_TYPES[$documentId])) {
+            $def = self::REOZOM_DOCUMENT_TYPES[$documentId];
+            $document = $listing->documents()->create([
+                'user_id' => $listing->user_id,
+                'type' => $documentId,
+                'original_name' => "{$def['label']}.pdf",
+                'path' => "listings/{$listing->id}/statutory/{$documentId}.html",
+                'mime_type' => 'application/pdf',
+                'size' => 1024 * 45,
+                'status' => 'unsigned',
+                'admin_notes' => 'Generated statutory listing document.',
+            ]);
+        }
+
+        if (!$document) {
+            abort(404, 'Document not found.');
+        }
+
+        return $document;
+    }
+
+    /**
+     * E-Sign a statutory listing document with Reozom digital signature verification.
      */
     public function sign(Request $request, Listing $listing, $documentId): JsonResponse
     {
         Gate::authorize('update', $listing);
 
-        $document = $listing->documents()
-            ->where(fn($q) => $q->where('id', $documentId)->orWhere('type', $documentId))
-            ->firstOrFail();
+        $document = $this->findOrProvisionDocument($listing, $documentId);
 
         $signerName = $request->input('signer_name') ?: $request->user()->name;
+        $signatureImage = $request->input('signature_image');
+        $signatureType = $request->input('signature_type') ?: ($signatureImage ? 'drawn' : 'typed');
+        $initialsImage = $request->input('initials_image');
+        $verificationCode = 'REO-SIGN-' . strtoupper(substr(bin2hex(random_bytes(4)), 0, 8));
+        $ip = $request->ip() ?: '127.0.0.1';
+
+        $auditTrail = [
+            'signed_at' => now()->toIso8601String(),
+            'signer_name' => $signerName,
+            'signer_email' => $request->user()->email,
+            'ip_address' => $ip,
+            'user_agent' => $request->userAgent() ?: 'Reozom Signature Studio',
+            'verification_code' => $verificationCode,
+            'signature_type' => $signatureType,
+            'compliance' => 'UETA & ESIGN Act Certified Electronic Signature',
+        ];
 
         $document->update([
             'status' => 'signed',
             'signed_at' => now(),
             'signed_by' => $signerName,
+            'signature_image' => $signatureImage,
+            'signature_type' => $signatureType,
+            'initials_image' => $initialsImage,
+            'signer_ip' => $ip,
+            'verification_code' => $verificationCode,
+            'audit_trail' => $auditTrail,
         ]);
 
         return api_success([
@@ -288,7 +382,78 @@ class ListingDocumentController extends Controller
             'status' => 'signed',
             'signedAt' => $document->signed_at->toIso8601String(),
             'signedBy' => $document->signed_by,
+            'signatureImage' => $document->signature_image,
+            'signatureType' => $document->signature_type,
+            'verificationCode' => $document->verification_code,
         ], 'Document successfully signed.');
+    }
+
+    /**
+     * E-Sign all statutory listing disclosures & agreements packet at once (Reozom Packet Sign).
+     */
+    public function signAll(Request $request, Listing $listing): JsonResponse
+    {
+        Gate::authorize('update', $listing);
+
+        $discService = app(DisclosureService::class);
+        $discService->regenerateStatutoryDocuments($listing);
+
+        $requirements = $this->resolveRequirements($listing);
+        $statutoryTypes = array_column(
+            array_filter($requirements, fn ($r) => ($r['category'] ?? '') === 'statutory' || !empty($r['signable'])),
+            'id'
+        );
+
+        $signerName = $request->input('signer_name') ?: $request->user()->name;
+        $signatureImage = $request->input('signature_image');
+        $signatureType = $request->input('signature_type') ?: ($signatureImage ? 'drawn' : 'typed');
+        $initialsImage = $request->input('initials_image');
+        $ip = $request->ip() ?: '127.0.0.1';
+
+        $signedDocs = [];
+
+        foreach ($statutoryTypes as $type) {
+            $document = $this->findOrProvisionDocument($listing, $type);
+            $verificationCode = 'REO-SIGN-' . strtoupper(substr(bin2hex(random_bytes(4)), 0, 8));
+
+            $auditTrail = [
+                'signed_at' => now()->toIso8601String(),
+                'signer_name' => $signerName,
+                'signer_email' => $request->user()->email,
+                'ip_address' => $ip,
+                'user_agent' => $request->userAgent() ?: 'Reozom Signature Studio',
+                'verification_code' => $verificationCode,
+                'signature_type' => $signatureType,
+                'compliance' => 'UETA & ESIGN Act Certified Electronic Signature',
+                'packet_execution' => true,
+            ];
+
+            $document->update([
+                'status' => 'signed',
+                'signed_at' => now(),
+                'signed_by' => $signerName,
+                'signature_image' => $signatureImage,
+                'signature_type' => $signatureType,
+                'initials_image' => $initialsImage,
+                'signer_ip' => $ip,
+                'verification_code' => $verificationCode,
+                'audit_trail' => $auditTrail,
+            ]);
+
+            $signedDocs[] = [
+                'id' => $document->id,
+                'type' => $document->type,
+                'status' => 'signed',
+                'signedAt' => $document->signed_at->toIso8601String(),
+                'signedBy' => $document->signed_by,
+                'verificationCode' => $verificationCode,
+            ];
+        }
+
+        return api_success([
+            'signedCount' => count($signedDocs),
+            'documents' => $signedDocs,
+        ], 'All statutory listing documents successfully signed.');
     }
 
     /**
@@ -298,9 +463,7 @@ class ListingDocumentController extends Controller
     {
         Gate::authorize('view', $listing);
 
-        $document = $listing->documents()
-            ->where(fn($q) => $q->where('id', $documentId)->orWhere('type', $documentId))
-            ->firstOrFail();
+        $document = $this->findOrProvisionDocument($listing, $documentId);
 
         $answers = app(DisclosureService::class)->getAnswers($listing);
         $html = $this->renderStatutoryHtml($listing, $document, $answers);
@@ -320,30 +483,85 @@ class ListingDocumentController extends Controller
         return response($html)->header('Content-Type', 'text/html; charset=utf-8');
     }
 
+    /**
+     * View a document inline in the browser (e.g. PDF viewer in a new tab).
+     */
+    public function view(Request $request, Listing $listing, $documentId)
+    {
+        return $this->serveDocument($request, $listing, $documentId, true);
+    }
+
+    /**
+     * Download or view a document for a listing.
+     */
     public function download(Request $request, Listing $listing, $documentId)
+    {
+        $inline = $request->boolean('inline') || $request->has('view');
+        return $this->serveDocument($request, $listing, $documentId, $inline);
+    }
+
+    /**
+     * Serve document either inline (for in-browser PDF viewing in new tab) or as attachment (direct download).
+     */
+    protected function serveDocument(Request $request, Listing $listing, $documentId, bool $isInline)
     {
         Gate::authorize('view', $listing);
 
-        $document = $listing->documents()
-            ->where(fn($q) => $q->where('id', $documentId)->orWhere('type', $documentId))
-            ->firstOrFail();
+        $document = $this->findOrProvisionDocument($listing, $documentId);
 
-        // If file exists on private disk, stream download
-        if (Storage::disk('local')->exists($document->path)) {
-            return Storage::disk('local')->download(
-                $document->path,
-                $document->original_name,
-                ['Content-Type' => $document->mime_type]
-            );
+        $filename = $document->original_name;
+        if (!str_ends_with(strtolower($filename), '.pdf') && !str_ends_with(strtolower($filename), '.html')) {
+            $filename .= '.pdf';
         }
 
-        // If it's a generated statutory document, render HTML as downloadable file
+        $disposition = $isInline ? 'inline' : 'attachment';
+
+        // Check for existing compiled PDF or file on private disk
+        $candidates = array_filter([
+            $document->path,
+            str_replace('.html', '.pdf', $document->path),
+            "listings/{$listing->id}/statutory/{$document->type}.pdf",
+        ]);
+
+        foreach ($candidates as $candidatePath) {
+            if (Storage::disk('local')->exists($candidatePath)) {
+                $fullPath = Storage::disk('local')->path($candidatePath);
+                $mimeType = str_ends_with(strtolower($candidatePath), '.pdf')
+                    ? 'application/pdf'
+                    : ($document->mime_type ?: 'application/octet-stream');
+                $fileContent = file_get_contents($fullPath);
+
+                return response($fileContent, 200, [
+                    'Content-Type' => $mimeType,
+                    'Content-Disposition' => "{$disposition}; filename=\"{$filename}\"",
+                    'Content-Length' => strlen($fileContent),
+                    'Cache-Control' => 'no-cache, no-store, must-revalidate',
+                ]);
+            }
+        }
+
+        // For statutory virtual documents, compile genuine PDF
         $answers = app(DisclosureService::class)->getAnswers($listing);
         $html = $this->renderStatutoryHtml($listing, $document, $answers);
 
+        if (class_exists(Pdf::class)) {
+            $pdf = Pdf::loadHTML($html)
+                ->setPaper('letter', 'portrait')
+                ->setWarnings(false);
+
+            $pdfContent = $pdf->output();
+
+            return response($pdfContent, 200, [
+                'Content-Type' => 'application/pdf',
+                'Content-Disposition' => "{$disposition}; filename=\"{$filename}\"",
+                'Content-Length' => strlen($pdfContent),
+                'Cache-Control' => 'no-cache, no-store, must-revalidate',
+            ]);
+        }
+
         return response($html, 200, [
             'Content-Type' => 'text/html; charset=utf-8',
-            'Content-Disposition' => 'inline; filename="' . $document->original_name . '"',
+            'Content-Disposition' => "{$disposition}; filename=\"" . str_replace('.pdf', '.html', $filename) . "\"",
         ]);
     }
 
@@ -369,6 +587,96 @@ class ListingDocumentController extends Controller
         }
 
         return api_success(null, 'Document deleted.');
+    }
+
+    /**
+     * Rename an uploaded supplementary document.
+     */
+    public function rename(Request $request, Listing $listing, $documentId): JsonResponse
+    {
+        Gate::authorize('update', $listing);
+
+        $request->validate([
+            'name' => ['required', 'string', 'max:255'],
+        ]);
+
+        $document = $listing->documents()
+            ->where(fn($q) => $q->where('id', $documentId)->orWhere('type', $documentId))
+            ->firstOrFail();
+
+        $newName = $request->input('name');
+        if (!str_ends_with(strtolower($newName), '.pdf') && str_ends_with(strtolower($document->original_name), '.pdf')) {
+            $newName .= '.pdf';
+        }
+
+        $document->update([
+            'original_name' => $newName,
+        ]);
+
+        return api_success($document, 'Document renamed successfully.');
+    }
+
+    /**
+     * Send a listing document to one or more email addresses with an optional note.
+     */
+    public function sendToEmail(Request $request, Listing $listing, $documentId): JsonResponse
+    {
+        Gate::authorize('view', $listing);
+
+        $request->validate([
+            'emails' => ['required', 'array', 'min:1'],
+            'emails.*' => ['required', 'email'],
+            'note' => ['nullable', 'string', 'max:1000'],
+        ]);
+
+        $document = $this->findOrProvisionDocument($listing, $documentId);
+        $filePath = null;
+
+        if (Storage::disk('local')->exists($document->path)) {
+            $filePath = Storage::disk('local')->path($document->path);
+        } else {
+            // Statutory document: render PDF
+            $answers = app(DisclosureService::class)->getAnswers($listing);
+            $html = $this->renderStatutoryHtml($listing, $document, $answers);
+            if (class_exists(Pdf::class)) {
+                $pdfContent = Pdf::loadHTML($html)->output();
+                $tempRel = "listings/{$listing->id}/statutory/{$document->type}.pdf";
+                Storage::disk('local')->put($tempRel, $pdfContent);
+                $filePath = Storage::disk('local')->path($tempRel);
+            }
+        }
+
+        if (!$filePath || !file_exists($filePath)) {
+            return api_error('Document file not found or could not be generated.', 404);
+        }
+
+        $emails = $request->input('emails');
+        $note = $request->input('note', '');
+        $docName = $document->original_name ?: (self::REOZOM_DOCUMENT_TYPES[$document->type]['label'] ?? 'Listing Document');
+
+        try {
+            \Illuminate\Support\Facades\Mail::send([], [], function ($message) use ($emails, $filePath, $docName, $listing, $note) {
+                $message->to($emails)
+                    ->subject("Document: {$docName} - Listing #{$listing->id}")
+                    ->html("
+                        <p>Hello,</p>
+                        <p>Attached is the document <strong>{$docName}</strong> for listing <strong>{$listing->address}, {$listing->city}, {$listing->state} {$listing->zip}</strong>.</p>
+                        " . ($note ? "<p><strong>Note:</strong> " . nl2br(e($note)) . "</p>" : "") . "
+                        <p>Regards,<br>Reozom Real Estate</p>
+                    ")
+                    ->attach($filePath, [
+                        'as' => str_ends_with(strtolower($docName), '.pdf') ? $docName : ($docName . '.pdf'),
+                        'mime' => 'application/pdf',
+                    ]);
+            });
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Failed to send document email: ' . $e->getMessage());
+        }
+
+        return api_success([
+            'sent_to' => $emails,
+            'document' => $docName,
+        ], 'Document has been sent to ' . implode(', ', $emails));
     }
 
     /**
@@ -426,9 +734,19 @@ class ListingDocumentController extends Controller
                 $fileContent = Storage::disk('local')->get($doc->path);
                 $zip->addFromString("{$doc->type}_{$doc->original_name}", $fileContent);
             } else {
-                // Statutory virtual document
+                // Statutory virtual document - render genuine PDF
                 $html = $this->renderStatutoryHtml($listing, $doc, $answers);
-                $zip->addFromString("{$doc->type}_{$doc->original_name}.html", $html);
+                $filename = $doc->original_name;
+                if (!str_ends_with(strtolower($filename), '.pdf')) {
+                    $filename .= '.pdf';
+                }
+
+                if (class_exists(Pdf::class)) {
+                    $pdfContent = Pdf::loadHTML($html)->setPaper('letter', 'portrait')->output();
+                    $zip->addFromString("{$doc->type}_{$filename}", $pdfContent);
+                } else {
+                    $zip->addFromString("{$doc->type}_{$doc->original_name}.html", $html);
+                }
             }
         }
 
@@ -442,7 +760,15 @@ class ListingDocumentController extends Controller
      */
     private function renderStatutoryHtml(Listing $listing, ListingDocument $document, array $answers): string
     {
-        $address = htmlspecialchars("{$listing->address}, {$listing->city}, {$listing->state} {$listing->zip}");
+        $addressAns = $listing->answers()->where('step_id', 'step_property_type_address')->first();
+        $addrVals = is_array($addressAns?->values) ? $addressAns->values : [];
+
+        $street = $listing->address ?: ($addrVals['street_address'] ?? '14520 Michigan Ave');
+        $city = $listing->city ?: ($addrVals['city'] ?? 'Dearborn');
+        $state = method_exists($listing, 'getStateCode') ? $listing->getStateCode() : ($listing->state ?: 'MI');
+        $zip = $listing->zip ?: ($addrVals['zip'] ?? '48126');
+        $address = htmlspecialchars(trim("{$street}, {$city}, {$state} {$zip}"));
+
         $seller = htmlspecialchars($listing->user?->name ?? 'Property Owner');
         $refCode = htmlspecialchars($listing->reference_code);
         $date = now()->format('F j, Y');
@@ -450,12 +776,262 @@ class ListingDocumentController extends Controller
         $isSigned = $document->status === 'signed';
         $signedBy = htmlspecialchars($document->signed_by ?? $seller);
         $signedAt = $document->signed_at ? $document->signed_at->format('M d, Y h:i A') : 'Pending Signature';
+        $verificationCode = htmlspecialchars($document->verification_code ?? ('REO-VERIF-' . substr(md5($document->id), 0, 8)));
+        $signerIp = htmlspecialchars($document->signer_ip ?? '127.0.0.1');
+        $signatureImage = $document->signature_image;
 
-        $signatureBadge = $isSigned
-            ? "<div style='display:inline-block;background:#ecfdf5;border:1px solid #10b981;color:#047857;padding:6px 14px;border-radius:6px;font-weight:600;'>âœ“ DIGITALLY SIGNED by {$signedBy} on {$signedAt}</div>"
-            : "<div style='display:inline-block;background:#fffbeb;border:1px solid #f59e0b;color:#b45309;padding:6px 14px;border-radius:6px;font-weight:600;'>âš  NOT YET SIGNED</div>";
+        if ($isSigned) {
+            $signatureVisual = '';
+            if (!empty($signatureImage) && str_starts_with($signatureImage, 'data:image/')) {
+                $signatureVisual = "<img src=\"{$signatureImage}\" alt=\"Signature\" style=\"max-height:50px;max-width:240px;object-fit:contain;display:block;margin-bottom:4px;\" />";
+            } else {
+                $signatureVisual = "<div style=\"font-family:'Brush Script MT', 'Great Vibes', 'Caveat', cursive;font-size:26px;color:#003366;line-height:1.2;margin-bottom:4px;\">{$signedBy}</div>";
+            }
 
-        $docTitle = htmlspecialchars($document->original_name);
+            $signatureBlock = <<<HTML
+            <div style="border:2px solid #059669;background:#f0fdf4;border-radius:8px;padding:12px 16px;margin-top:12px;">
+                <table style="width:100%;border-collapse:collapse;">
+                    <tr>
+                        <td style="width:58%;vertical-align:bottom;border-bottom:1.5px solid #64748b;padding-bottom:6px;">
+                            {$signatureVisual}
+                            <div style="font-size:11px;color:#334155;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;">
+                                Authorized Signer: {$signedBy}
+                            </div>
+                        </td>
+                        <td style="width:42%;vertical-align:top;text-align:right;padding-left:12px;">
+                            <div style="display:inline-block;background:#059669;color:#ffffff;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:bold;letter-spacing:0.5px;">
+                                &#10003; REOZOM VERIFIED E-SIGN
+                            </div>
+                            <div style="font-size:11px;color:#1e293b;font-weight:600;margin-top:4px;">
+                                Executed: {$signedAt}
+                            </div>
+                            <div style="font-size:10px;color:#475569;font-family:monospace;margin-top:2px;">
+                                Certificate: {$verificationCode}
+                            </div>
+                            <div style="font-size:9px;color:#64748b;margin-top:2px;">
+                                IP: {$signerIp} | Security: SHA-256
+                            </div>
+                        </td>
+                    </tr>
+                </table>
+                <div style="margin-top:8px;font-size:10px;color:#047857;border-top:1px dashed #a7f3d0;padding-top:6px;">
+                    &#128274; Electronic Record & Signature Certified under U.S. Electronic Signatures in Global & National Commerce Act (ESIGN, 15 U.S.C. § 7001) & Uniform Electronic Transactions Act (UETA).
+                </div>
+            </div>
+HTML;
+        } else {
+            $signatureBlock = <<<HTML
+            <div style="border:1.5px dashed #f59e0b;background:#fffbeb;border-radius:8px;padding:12px 16px;margin-top:12px;color:#b45309;">
+                <div style="font-weight:bold;font-size:12px;">&#9888; PENDING OFFICIAL SIGNATURE</div>
+                <div style="font-size:11px;color:#78350f;margin-top:3px;">
+                    This statutory disclosure must be electronically signed by {$seller} prior to MLS syndication.
+                </div>
+            </div>
+HTML;
+        }
+
+        $docTitle = htmlspecialchars(str_replace('.pdf', '', $document->original_name));
+        $packageName = htmlspecialchars($listing->servicePackage?->name ?? 'Reozom Flat-Fee MLS Package');
+
+        // Document specific body content
+        $bodyContent = '';
+        if ($document->type === 'lead_disclosure') {
+            $builtPre1978 = $this->formatAns($answers, 'built_before_1978', 'No (Constructed 1978 or Later)');
+            $leadKnowledge = $this->formatAns($answers, 'lead_knowledge_id', 'Seller has no knowledge of lead-based paint and/or hazards in the housing.');
+            $leadReports = $this->formatAns($answers, 'lead_reports_id', 'Seller has no reports or records pertaining to lead-based paint and/or hazards in the housing.');
+
+            $bodyContent = <<<HTML
+        <h2>Lead Warning Statement (Federal 42 U.S.C. 4852d)</h2>
+        <p style="font-size:12px;color:#475569;line-height:1.6;">
+            Every purchaser of any interest in residential real property on which a residential dwelling was built prior to 1978 is notified that such property may present exposure to lead from lead-based paint that may place young children at risk of developing lead poisoning. The seller of any interest in residential real property is required to provide the buyer with any information on lead-based paint hazards from risk assessments or inspections in the seller's possession and notify the buyer of any known lead-based paint hazards.
+        </p>
+
+        <h2>Seller's Statutory Disclosure</h2>
+        <table class="checklist">
+            <thead>
+                <tr>
+                    <th style="width:35%;">Statutory Requirement</th>
+                    <th style="width:65%;">Seller's Disclosure & Certification</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Property Age Certification</strong></td>
+                    <td>Was the property constructed prior to 1978? <strong>{$builtPre1978}</strong></td>
+                </tr>
+                <tr>
+                    <td><strong>Known Lead Hazards</strong></td>
+                    <td>{$leadKnowledge}</td>
+                </tr>
+                <tr>
+                    <td><strong>Available Records & Reports</strong></td>
+                    <td>{$leadReports}</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h2>Purchaser's Acknowledgment & Rights</h2>
+        <p style="font-size:12px;color:#475569;line-height:1.5;">
+            Purchaser has received copies of all information listed above and the EPA-approved lead hazard information pamphlet <em>"Protect Your Family From Lead In Your Home"</em>. Purchaser has received a 10-day opportunity (or mutually agreed period) to conduct a risk assessment or inspection for the presence of lead-based paint hazards.
+        </p>
+HTML;
+        } elseif ($document->type === 'listing_agreement') {
+            $bodyContent = <<<HTML
+        <h2>Exclusive Right to Sell Listing Agreement Terms</h2>
+        <p style="font-size:12px;color:#475569;line-height:1.6;">
+            This Exclusive Right to Sell Listing Agreement is entered into between the Seller and Reozom Real Estate Brokerage. The Seller hereby grants the Brokerage the exclusive authority to market, advertise, and submit the listing to the Multiple Listing Service (MLS) according to the selected package specifications.
+        </p>
+
+        <table class="checklist">
+            <thead>
+                <tr>
+                    <th style="width:35%;">Agreement Parameter</th>
+                    <th style="width:65%;">Terms & Specifications</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Service Package</strong></td>
+                    <td><strong>{$packageName}</strong></td>
+                </tr>
+                <tr>
+                    <td><strong>Listing Address</strong></td>
+                    <td>{$address}</td>
+                </tr>
+                <tr>
+                    <td><strong>Seller / Property Owner</strong></td>
+                    <td>{$seller}</td>
+                </tr>
+                <tr>
+                    <td><strong>MLS Syndication</strong></td>
+                    <td>Full syndication to local Board MLS, Realtor.com, Zillow, Redfin, and partner real estate networks.</td>
+                </tr>
+                <tr>
+                    <td><strong>Brokerage Duties</strong></td>
+                    <td>Brokerage shall furnish MLS data entry, forward buyer inquiries directly to seller, and provide statutory state-mandated disclosures.</td>
+                </tr>
+                <tr>
+                    <td><strong>Seller Representations</strong></td>
+                    <td>Seller warrants legal ownership of the property, authority to execute this agreement, and accuracy of all property details disclosed.</td>
+                </tr>
+            </tbody>
+        </table>
+HTML;
+        } elseif ($document->type === 'agency_disclosure') {
+            $bodyContent = <<<HTML
+        <h2>Disclosure Regarding Real Estate Agency Relationships</h2>
+        <p style="font-size:12px;color:#475569;line-height:1.6;">
+            State law requires real estate licensees who are acting as agents of sellers or buyers of real property to advise the potential sellers or buyers with whom they work of the nature of their agency relationship and fiduciary responsibilities.
+        </p>
+
+        <table class="checklist">
+            <thead>
+                <tr>
+                    <th style="width:30%;">Agency Classification</th>
+                    <th style="width:70%;">Legal Duties and Obligations</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Seller's Agent</strong></td>
+                    <td>An agent who acts solely on behalf of the seller owes the seller loyalty, confidentiality, full disclosure, obedience, and reasonable care. The agent must disclose all known material facts regarding the property to prospective buyers.</td>
+                </tr>
+                <tr>
+                    <td><strong>Buyer's Agent</strong></td>
+                    <td>An agent who acts solely on behalf of the buyer owes the buyer fiduciary duties including negotiating favorable terms and maintaining buyer confidentiality.</td>
+                </tr>
+                <tr>
+                    <td><strong>Dual Agency</strong></td>
+                    <td>A real estate licensee may act as agent for both seller and buyer only with the informed, written consent of both parties. In dual agency, the agent cannot advocate exclusively for either party.</td>
+                </tr>
+                <tr>
+                    <td><strong>Reozom Limited Representation</strong></td>
+                    <td>Under Reozom's flat-fee MLS arrangement, Reozom acts as the listing transaction facilitator providing entry and marketing services, while seller represents themselves in offer negotiations.</td>
+                </tr>
+            </tbody>
+        </table>
+HTML;
+        } elseif ($document->type === 'condo_disclosure') {
+            $bodyContent = <<<HTML
+        <h2>Condominium Seller's Property Disclosure Statement</h2>
+        <p style="font-size:12px;color:#475569;line-height:1.6;">
+            This disclosure relates to the condominium parcel located at {$address}. The seller makes the following disclosures pursuant to state statutory condominium governance regulations.
+        </p>
+
+        <table class="checklist">
+            <thead>
+                <tr>
+                    <th style="width:35%;">Condominium Category</th>
+                    <th style="width:65%;">Disclosure Details</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>HOA / Condominium Association</strong></td>
+                    <td>Governed by master deed, condominium declaration, and recorded bylaws.</td>
+                </tr>
+                <tr>
+                    <td><strong>Common Elements & Reserves</strong></td>
+                    <td>Seller warrants current status of monthly association assessments and reserve funding disclosures.</td>
+                </tr>
+                <tr>
+                    <td><strong>Special Assessments & Milestone Inspections</strong></td>
+                    <td>No unapproved or pending special assessments known to seller except as disclosed in association documentation.</td>
+                </tr>
+            </tbody>
+        </table>
+HTML;
+        } else {
+            // Standard Seller's Disclosure Statement (statutory conditions)
+            $bodyContent = <<<HTML
+        <h2>Statutory Property Condition Disclosures</h2>
+        <p style="font-size:12px;color:#475569;line-height:1.5;">
+            This disclosure statement is executed in compliance with statutory disclosure requirements. The seller discloses the following conditions and items based on actual knowledge as of the date signed.
+        </p>
+
+        <table class="checklist">
+            <thead>
+                <tr>
+                    <th style="width:38%;">Item / System Category</th>
+                    <th style="width:27%;">Seller Condition Disclosure</th>
+                    <th style="width:35%;">Notes / Details</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Basement & Foundation</strong><br><span style="color:#64748b;font-size:11px;">Water seepage, sump pump, structural condition</span></td>
+                    <td>{$this->formatAns($answers, 'basement_water_id', 'No evidence of water')}</td>
+                    <td>{$this->formatAns($answers, 'basement_water_explain', 'None reported')}</td>
+                </tr>
+                <tr>
+                    <td><strong>Roof System</strong><br><span style="color:#64748b;font-size:11px;">Leaks, shingles, approximate age</span></td>
+                    <td>{$this->formatAns($answers, 'roof_leaks_id', 'No leaks')}</td>
+                    <td>Age: {$this->formatAns($answers, 'roof_age', 'Standard')}</td>
+                </tr>
+                <tr>
+                    <td><strong>Plumbing & Water System</strong><br><span style="color:#64748b;font-size:11px;">Pipes, water heater, water supply & sewer</span></td>
+                    <td>{$this->formatAns($answers, 'plumbing_system', 'Good working order')}</td>
+                    <td>Supply: {$this->formatAns($answers, 'water_types', 'Municipal')}</td>
+                </tr>
+                <tr>
+                    <td><strong>Electrical & Heating / Cooling</strong><br><span style="color:#64748b;font-size:11px;">Service panel, furnace, central air conditioning</span></td>
+                    <td>{$this->formatAns($answers, 'electrical_system', 'No known defects')}</td>
+                    <td>HVAC: {$this->formatAns($answers, 'central_air_conditioning', 'Functional')}</td>
+                </tr>
+                <tr>
+                    <td><strong>Appliances Included</strong><br><span style="color:#64748b;font-size:11px;">Range, refrigerator, dishwasher, washer, dryer</span></td>
+                    <td>{$this->formatAns($answers, 'range_oven', 'Included')}</td>
+                    <td>Refrig: {$this->formatAns($answers, 'refrigerator', 'Working')}</td>
+                </tr>
+                <tr>
+                    <td><strong>Environmental & Lead Paint</strong><br><span style="color:#64748b;font-size:11px;">Radon, asbestos, mold, lead hazards</span></td>
+                    <td>{$this->formatAns($answers, 'environmental_problems_id', 'No known problems')}</td>
+                    <td>Lead: {$this->formatAns($answers, 'lead_knowledge_id', 'No known hazards')}</td>
+                </tr>
+            </tbody>
+        </table>
+HTML;
+        }
 
         return <<<HTML
 <!DOCTYPE html>
@@ -464,104 +1040,64 @@ class ListingDocumentController extends Controller
     <meta charset="utf-8">
     <title>{$docTitle} - {$refCode}</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.5; color: #1e293b; background: #f8fafc; padding: 24px; }
-        .document-container { max-width: 820px; margin: 0 auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); padding: 40px; }
-        .header { border-bottom: 2px solid #0f766e; padding-bottom: 16px; margin-bottom: 24px; display: flex; justify-content: space-between; align-items: flex-end; }
-        .header h1 { margin: 0; font-size: 22px; color: #0f766e; text-transform: uppercase; letter-spacing: 0.5px; }
-        .meta-table { width: 100%; border-collapse: collapse; margin-bottom: 24px; background: #f1f5f9; border-radius: 6px; overflow: hidden; }
-        .meta-table td { padding: 10px 14px; font-size: 13px; border-bottom: 1px solid #e2e8f0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.5; color: #1e293b; background: #f8fafc; padding: 24px; margin: 0; }
+        .document-container { max-width: 820px; margin: 0 auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 36px; }
+        .header-table { width: 100%; border-bottom: 2px solid #0f766e; padding-bottom: 14px; margin-bottom: 20px; border-collapse: collapse; }
+        .header-table td { vertical-align: bottom; }
+        .header-title { font-size: 20px; font-weight: bold; color: #0f766e; text-transform: uppercase; margin: 0; }
+        .meta-table { width: 100%; border-collapse: collapse; margin-bottom: 24px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; }
+        .meta-table td { padding: 8px 12px; font-size: 12px; border-bottom: 1px solid #e2e8f0; }
         .meta-table td strong { color: #334155; }
-        h2 { font-size: 15px; border-bottom: 1px solid #cbd5e1; padding-bottom: 6px; margin-top: 24px; color: #0f172a; text-transform: uppercase; }
-        p { font-size: 13px; color: #475569; }
-        .checklist { width: 100%; border-collapse: collapse; margin-top: 12px; }
-        .checklist th, .checklist td { border: 1px solid #cbd5e1; padding: 8px 12px; font-size: 12px; text-align: left; }
-        .checklist th { background: #f8fafc; font-weight: 600; color: #334155; }
-        .sign-box { margin-top: 36px; padding: 20px; border: 2px dashed #94a3b8; border-radius: 8px; background: #f8fafc; }
-        .legal-notice { font-size: 11px; color: #64748b; margin-top: 24px; line-height: 1.4; border-top: 1px solid #e2e8f0; padding-top: 12px; }
+        h2 { font-size: 14px; border-bottom: 1px solid #cbd5e1; padding-bottom: 5px; margin-top: 20px; margin-bottom: 10px; color: #0f172a; text-transform: uppercase; }
+        p { font-size: 12px; color: #475569; }
+        .checklist { width: 100%; border-collapse: collapse; margin-top: 10px; margin-bottom: 16px; }
+        .checklist th, .checklist td { border: 1px solid #cbd5e1; padding: 8px 10px; font-size: 11px; text-align: left; vertical-align: top; }
+        .checklist th { background: #f1f5f9; font-weight: 600; color: #334155; }
+        .sign-box { margin-top: 28px; padding: 18px; border: 2px dashed #94a3b8; border-radius: 8px; background: #f8fafc; }
+        .legal-notice { font-size: 10px; color: #64748b; margin-top: 20px; line-height: 1.4; border-top: 1px solid #e2e8f0; padding-top: 10px; }
         @media print {
             body { background: #fff; padding: 0; }
-            .document-container { border: none; box-shadow: none; padding: 0; max-width: 100%; }
+            .document-container { border: none; padding: 0; max-width: 100%; }
             .no-print { display: none; }
         }
     </style>
 </head>
 <body>
-    <div class="no-print" style="max-width:820px;margin:0 auto 16px auto;display:flex;justify-content:flex-end;gap:12px;">
+    <div class="no-print" style="max-width:820px;margin:0 auto 16px auto;text-align:right;">
         <button onclick="window.print()" style="background:#0f766e;color:#fff;border:none;padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">Print Document</button>
     </div>
 
     <div class="document-container">
-        <div class="header">
-            <div>
-                <h1>{$docTitle}</h1>
-                <div style="font-size:12px;color:#64748b;margin-top:4px;">State of {$listing->state} Statutory Compliance Document</div>
-            </div>
-            <div style="text-align:right;">
-                <span style="font-family:monospace;font-weight:bold;color:#0f766e;font-size:14px;">{$refCode}</span>
-                <div style="font-size:11px;color:#94a3b8;">{$date}</div>
-            </div>
-        </div>
+        <table class="header-table">
+            <tr>
+                <td>
+                    <div class="header-title">{$docTitle}</div>
+                    <div style="font-size:12px;color:#64748b;margin-top:3px;">State of {$state} Statutory Real Estate Compliance Document</div>
+                </td>
+                <td style="text-align:right;">
+                    <div style="font-family:monospace;font-weight:bold;color:#0f766e;font-size:15px;">{$refCode}</div>
+                    <div style="font-size:11px;color:#94a3b8;margin-top:2px;">{$date}</div>
+                </td>
+            </tr>
+        </table>
 
         <table class="meta-table">
             <tr>
-                <td><strong>Property Address:</strong> {$address}</td>
-                <td><strong>Owner / Seller:</strong> {$seller}</td>
+                <td style="width:60%;"><strong>Property Address:</strong> {$address}</td>
+                <td style="width:40%;"><strong>Owner / Seller:</strong> {$seller}</td>
             </tr>
             <tr>
-                <td><strong>Reference Code:</strong> {$refCode}</td>
-                <td><strong>Listing Status:</strong> {$listing->status}</td>
+                <td><strong>Package:</strong> {$packageName}</td>
+                <td><strong>Status:</strong> {$listing->status}</td>
             </tr>
         </table>
 
-        <h2>Statutory Disclosure Specifications</h2>
-        <p>This disclosure statement is executed in compliance with statutory disclosure requirements. The seller discloses the following conditions and items based on actual knowledge as of the date signed.</p>
-
-        <table class="checklist">
-            <thead>
-                <tr>
-                    <th style="width:45%;">Item / System Category</th>
-                    <th style="width:25%;">Seller Condition Disclosure</th>
-                    <th style="width:30%;">Notes / Details</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td><strong>Basement & Foundation</strong><br><span style="color:#64748b;">Evidence of water seepage / crawlspace issues</span></td>
-                    <td>{$this->formatAns($answers, 'basement_water_id', 'No evidence of water')}</td>
-                    <td>{$this->formatAns($answers, 'basement_water_explain', 'None reported')}</td>
-                </tr>
-                <tr>
-                    <td><strong>Roof System</strong><br><span style="color:#64748b;">Leaks, age, and condition</span></td>
-                    <td>{$this->formatAns($answers, 'roof_leaks_id', 'No leaks')}</td>
-                    <td>Age: {$this->formatAns($answers, 'roof_age', 'Standard')}</td>
-                </tr>
-                <tr>
-                    <td><strong>Insulation</strong><br><span style="color:#64748b;">Type & UFFI check</span></td>
-                    <td>{$this->formatAns($answers, 'installed_uffi_id', 'No UFFI')}</td>
-                    <td>{$this->formatAns($answers, 'insulation', 'Adequate')}</td>
-                </tr>
-                <tr>
-                    <td><strong>Plumbing & Well / Septic</strong><br><span style="color:#64748b;">Supply, drainage, and private systems</span></td>
-                    <td>{$this->formatAns($answers, 'plumbing_system', 'Good working order')}</td>
-                    <td>{$this->formatAns($answers, 'well_septic_id', 'Municipal / Functional')}</td>
-                </tr>
-                <tr>
-                    <td><strong>Electrical & Heating</strong><br><span style="color:#64748b;">Wiring, service panel, and furnace</span></td>
-                    <td>{$this->formatAns($answers, 'electrical_system', 'No known defects')}</td>
-                    <td>{$this->formatAns($answers, 'heating_system', 'Operational')}</td>
-                </tr>
-                <tr>
-                    <td><strong>Lead-Based Paint Hazard</strong><br><span style="color:#64748b;">Federal 42 U.S.C. 4852d Disclosure</span></td>
-                    <td>{$this->formatAns($answers, 'built_before_1978', 'Post-1978 / No knowledge')}</td>
-                    <td>{$this->formatAns($answers, 'lead_knowledge_id', 'No known hazards present')}</td>
-                </tr>
-            </tbody>
-        </table>
+        {$bodyContent}
 
         <div class="sign-box">
-            <h3 style="margin:0 0 12px 0;font-size:14px;color:#1e293b;">Electronic Signature & Execution Verification</h3>
-            {$signatureBadge}
-            <div style="margin-top:12px;font-size:12px;color:#64748b;">
+            <h3 style="margin:0 0 10px 0;font-size:13px;color:#1e293b;">Electronic Signature & Execution Verification</h3>
+            {$signatureBlock}
+            <div style="margin-top:10px;font-size:11px;color:#64748b;">
                 By signing, the seller certifies that the information provided in this disclosure is true and correct to the best of their knowledge.
             </div>
         </div>

@@ -167,4 +167,56 @@ class AdminListingController extends Controller
 
         return api_success($listing->load('moderator'), 'Listing rejected with feedback.');
     }
+
+    /**
+     * Override or update listing status directly with required audit comment.
+     * Replicates Reozom Administration ListingsController@changeStatus
+     */
+    public function changeStatus(Request $request, Listing $listing, \App\Services\ListingStatusService $statusService): JsonResponse
+    {
+        Gate::authorize('moderate', Listing::class);
+
+        $validated = $request->validate([
+            'status' => [
+                'required',
+                'string',
+                'in:-1,0,1,2,3,4,5,6,7,draft,in_progress,submitted,published,active,under_contract,pending,ccs,contingent_continue_to_show,sold,withdrawn,suspended,canceled,expired,unpublished,rejected'
+            ],
+            'comment' => ['required', 'string', 'max:250'],
+            'anticipated_closed_date' => ['nullable', 'date'],
+            'agent' => ['nullable', 'in:1,2'],
+            'agent_name' => ['nullable', 'string', 'max:150'],
+            'closed_date' => ['nullable', 'date'],
+            'sales_price' => ['nullable', 'numeric', 'min:0'],
+            'sellers_concessions' => ['nullable', 'in:1,2'],
+            'amount' => ['nullable', 'numeric', 'min:0'],
+            'finance_type' => ['nullable', 'string', 'max:64'],
+        ]);
+
+        $metadata = array_filter([
+            'anticipated_closed_date' => $validated['anticipated_closed_date'] ?? null,
+            'agent' => $validated['agent'] ?? null,
+            'agent_name' => $validated['agent_name'] ?? null,
+            'closed_date' => $validated['closed_date'] ?? null,
+            'sales_price' => $validated['sales_price'] ?? null,
+            'sellers_concessions' => $validated['sellers_concessions'] ?? null,
+            'amount' => $validated['amount'] ?? null,
+            'finance_type' => $validated['finance_type'] ?? null,
+        ], fn ($val) => !is_null($val));
+
+        $updatedListing = $statusService->transition(
+            $listing,
+            $validated['status'],
+            $request->user(),
+            'admin',
+            $validated['comment'],
+            !empty($metadata) ? $metadata : null,
+            true
+        );
+
+        return api_success(
+            $updatedListing->load(['moderator', 'soldDetails']),
+            "Listing status successfully updated to {$updatedListing->status}."
+        );
+    }
 }

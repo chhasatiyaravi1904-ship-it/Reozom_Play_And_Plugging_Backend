@@ -78,4 +78,51 @@ class ListingDocumentManagementTest extends TestCase
         $this->assertEquals('Ownership verified with county clerk.', $document->fresh()->admin_notes);
         $this->assertEquals($this->admin->id, $document->fresh()->reviewed_by);
     }
+
+    public function test_seller_can_rename_uploaded_document(): void
+    {
+        $document = ListingDocument::create([
+            'listing_id' => $this->listing->id,
+            'user_id' => $this->seller->id,
+            'type' => 'survey',
+            'original_name' => 'old_survey.pdf',
+            'path' => "listings/{$this->listing->id}/documents/survey.pdf",
+            'mime_type' => 'application/pdf',
+            'size' => 2048,
+            'status' => 'uploaded',
+        ]);
+
+        $response = $this->actingAs($this->seller)->putJson("/api/listings/{$this->listing->id}/documents/{$document->id}/rename", [
+            'name' => 'Boundary_Survey_2026.pdf',
+        ]);
+
+        $response->assertStatus(200);
+        $this->assertEquals('Boundary_Survey_2026.pdf', $document->fresh()->original_name);
+    }
+
+    public function test_seller_can_send_document_to_email(): void
+    {
+        \Illuminate\Support\Facades\Mail::fake();
+
+        Storage::disk('local')->put("listings/{$this->listing->id}/documents/deed.pdf", 'dummy pdf content');
+
+        $document = ListingDocument::create([
+            'listing_id' => $this->listing->id,
+            'user_id' => $this->seller->id,
+            'type' => 'deed',
+            'original_name' => 'Warranty_Deed.pdf',
+            'path' => "listings/{$this->listing->id}/documents/deed.pdf",
+            'mime_type' => 'application/pdf',
+            'size' => 1024,
+            'status' => 'uploaded',
+        ]);
+
+        $response = $this->actingAs($this->seller)->postJson("/api/listings/{$this->listing->id}/documents/{$document->id}/send-email", [
+            'emails' => ['buyer@example.com', 'title_company@example.com'],
+            'note' => 'Please find attached the signed deed.',
+        ]);
+
+        $response->assertStatus(200);
+        $response->assertJsonPath('data.document', 'Warranty_Deed.pdf');
+    }
 }

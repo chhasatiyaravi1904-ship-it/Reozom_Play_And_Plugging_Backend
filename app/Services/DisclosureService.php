@@ -10,9 +10,125 @@ use Illuminate\Support\Str;
 class DisclosureService
 {
     /**
-     * Get statutory disclosure schema matching the Reozom platform specifications.
+     * Get all available active disclosures for a listing, with selection and statutory status.
      */
-    public function getDisclosureSchema(Listing $listing): array
+    public function getAvailableDisclosuresForListing(Listing $listing): array
+    {
+        $all = \App\Models\PropertyDisclosure::active()
+            ->forListing($listing)
+            ->orderBy('order')
+            ->get();
+
+        $selectedCodes = $this->getSelectedDisclosureCodes($listing);
+
+        $result = [];
+        foreach ($all as $d) {
+            $schema = $d->schema ?? [];
+            $sections = $schema['sections'] ?? [];
+            $questionCount = 0;
+            foreach ($sections as $s) {
+                $questionCount += count($s['fields'] ?? []);
+            }
+
+            $processRequired = in_array($d->code, $listing->listingProcess?->getRequiredDisclosures() ?? []);
+            $isMandatory = $processRequired || ($d->is_required && in_array($d->category, ['statutory']));
+
+            $result[] = [
+                'code' => $d->code,
+                'title' => $d->title,
+                'description' => $d->description,
+                'category' => $d->category,
+                'state_code' => $d->state_code,
+                'property_type' => $d->property_type,
+                'order' => $d->order,
+                'is_required' => $d->is_required,
+                'is_mandatory' => $isMandatory,
+                'is_selected' => in_array($d->code, $selectedCodes),
+                'sections_count' => count($sections),
+                'questions_count' => $questionCount,
+                'sections' => $sections,
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Determine which disclosure codes are currently selected/required for this listing.
+     * Hierarchy:
+     * 1. Saved selection in listing answers ('required_disclosures')
+     * 2. ListingProcess configured required_disclosures
+     * 3. State/property-type statutory defaults (PropertyDisclosure where is_required = true)
+     */
+    public function getSelectedDisclosureCodes(Listing $listing): array
+    {
+        // 1. Explicit selection saved for listing
+        $saved = $listing->answers()->where('step_id', 'required_disclosures')->first();
+        if ($saved && is_array($saved->values) && isset($saved->values['selected_codes'])) {
+            return (array) $saved->values['selected_codes'];
+        }
+
+        // 2. ListingProcess configured required disclosures
+        $processDisclosures = $listing->listingProcess?->getRequiredDisclosures();
+        if (!empty($processDisclosures) && is_array($processDisclosures)) {
+            return $processDisclosures;
+        }
+
+        // 3. Defaults based on statutory requirements for this listing
+        return \App\Models\PropertyDisclosure::active()
+            ->forListing($listing)
+            ->where(function ($q) {
+                $q->where('is_required', true)
+                  ->orWhere('category', 'statutory');
+            })
+            ->pluck('code')
+            ->all();
+    }
+
+    /**
+     * Get statutory disclosure schema matching the Reozom platform specifications.
+     * Returns schemas for only the selected disclosures (or all applicable if none specified).
+     */
+    public function getDisclosureSchema(Listing $listing, ?array $selectedCodes = null): array
+    {
+        $selectedCodes = $selectedCodes ?? $this->getSelectedDisclosureCodes($listing);
+
+        $query = \App\Models\PropertyDisclosure::active()
+            ->forListing($listing)
+            ->orderBy('order');
+
+        if (!empty($selectedCodes)) {
+            $query->whereIn('code', $selectedCodes);
+        }
+
+        $dynamicDisclosures = $query->get();
+
+        if ($dynamicDisclosures->isNotEmpty()) {
+            $steps = [];
+            foreach ($dynamicDisclosures as $idx => $d) {
+                $schema = $d->schema ?? [];
+                $steps[] = [
+                    'id' => $d->code,
+                    'name' => $d->title,
+                    'order' => $d->order ?? ($idx + 1),
+                    'description' => $d->description,
+                    'is_required' => $d->is_required,
+                    'category' => $d->category,
+                    'state_code' => $d->state_code,
+                    'property_type' => $d->property_type,
+                    'sections' => $schema['sections'] ?? [],
+                ];
+            }
+            return $steps;
+        }
+
+        return $this->getDefaultDisclosureSchema();
+    }
+
+    /**
+     * Fallback standard statutory property disclosures.
+     */
+    public function getDefaultDisclosureSchema(): array
     {
         return [
             [
@@ -361,9 +477,23 @@ class DisclosureService
     /**
      * Save disclosures and automatically provision/regenerate statutory listing documents.
      */
-    public function saveDisclosures(Listing $listing, array $answers): void
+    /**
+     * Save disclosures and automatically provision/regenerate statutory listing documents.
+     */
+    public function saveDisclosures(Listing $listing, array $answers, ?array $selectedCodes = null): void
     {
-        // 1. Persist master disclosures answer
+        // 1. If explicit selection was made, persist it
+        if ($selectedCodes !== null) {
+            $selectedCodes = array_values(array_unique($selectedCodes));
+            $listing->answers()->updateOrCreate(
+                ['step_id' => 'required_disclosures'],
+                ['values' => ['selected_codes' => $selectedCodes]]
+            );
+        } else {
+            $selectedCodes = $this->getSelectedDisclosureCodes($listing);
+        }
+
+        // 2. Persist master disclosures answer
         $listing->answers()->updateOrCreate(
             ['step_id' => 'disclosures'],
             ['values' => $answers]
@@ -379,41 +509,70 @@ class DisclosureService
             }
         }
 
-        // 2. Automatically provision or regenerate statutory listing documents (Reozom logic)
-        $this->regenerateStatutoryDocuments($listing);
+        // 3. Automatically provision or regenerate statutory listing documents for selected disclosures
+        $this->regenerateStatutoryDocuments($listing, $selectedCodes);
     }
 
     /**
-     * Provision and regenerate the standard statutory documents for this listing.
+     * Provision and regenerate the standard statutory documents for this listing matching the selected disclosures.
      * Reozom Document Types:
-     * - sellers_disclosure: Seller's Disclosure Statement
-     * - lead_disclosure: Lead-Based Paint Hazard Disclosure
+     * - sellers_disclosure: Seller's Disclosure Statement (MI/FL Residential or Vacant Land)
+     * - lead_disclosure: Lead-Based Paint Hazard Disclosure (Pre-1978 Housing)
+     * - condo_disclosure: Florida Condominium Seller's Property Disclosure
      * - listing_agreement: Exclusive Right to Sell Listing Agreement
      * - agency_disclosure: Agency Disclosure Statement
      */
-    public function regenerateStatutoryDocuments(Listing $listing): void
+    public function regenerateStatutoryDocuments(Listing $listing, ?array $selectedCodes = null): void
     {
-        $statutoryDefs = [
-            [
+        $selectedCodes = $selectedCodes ?? $this->getSelectedDisclosureCodes($listing);
+
+        $statutoryDefs = [];
+
+        // Sellers Disclosure (MI, FL, or general property condition disclosures)
+        $hasSellersDisclosure = empty($selectedCodes)
+            || in_array('mi_residential_appliances', $selectedCodes)
+            || in_array('mi_residential_conditions', $selectedCodes)
+            || in_array('mi_vacant_land_disclosure', $selectedCodes)
+            || in_array('fl_residential_single_family', $selectedCodes)
+            || in_array('fl_vacant_land_disclosure', $selectedCodes)
+            || in_array('property_conditions', $selectedCodes);
+
+        if ($hasSellersDisclosure) {
+            $statutoryDefs[] = [
                 'type' => 'sellers_disclosure',
                 'name' => "Seller's Disclosure Statement",
                 'description' => 'Mandatory statutory disclosure statement describing property conditions and improvements.',
-            ],
-            [
+            ];
+        }
+
+        // Lead-Based Paint Hazard Disclosure
+        if (empty($selectedCodes) || in_array('lead_paint_disclosure', $selectedCodes) || in_array('lead_paint', $selectedCodes)) {
+            $statutoryDefs[] = [
                 'type' => 'lead_disclosure',
                 'name' => 'Lead-Based Paint Hazard Disclosure',
                 'description' => 'Federal EPA & State statutory lead-based paint hazard disclosure.',
-            ],
-            [
-                'type' => 'listing_agreement',
-                'name' => 'Exclusive Right to Sell Listing Agreement',
-                'description' => 'Exclusive listing agreement with brokerage, package terms, and commission specifications.',
-            ],
-            [
-                'type' => 'agency_disclosure',
-                'name' => 'Agency Disclosure Statement',
-                'description' => 'Disclosure Regarding Real Estate Agency Relationships and duties.',
-            ],
+            ];
+        }
+
+        // Florida Condo Disclosure
+        if (in_array('fl_residential_condo', $selectedCodes)) {
+            $statutoryDefs[] = [
+                'type' => 'condo_disclosure',
+                'name' => 'Condominium Seller\'s Property Disclosure',
+                'description' => 'Florida statutory condominium governance, reserve funding, and milestone inspection disclosure.',
+            ];
+        }
+
+        // Standard brokerage listing agreements (always included with package)
+        $statutoryDefs[] = [
+            'type' => 'listing_agreement',
+            'name' => 'Exclusive Right to Sell Listing Agreement',
+            'description' => 'Exclusive listing agreement with brokerage, package terms, and commission specifications.',
+        ];
+        $statutoryDefs[] = [
+            'type' => 'agency_disclosure',
+            'name' => 'Agency Disclosure Statement',
+            'description' => 'Disclosure Regarding Real Estate Agency Relationships and duties.',
         ];
 
         foreach ($statutoryDefs as $def) {
@@ -431,6 +590,14 @@ class DisclosureService
                     'admin_notes' => 'Generated from seller disclosures questionnaire.',
                 ]);
             }
+        }
+
+        // Clean up any statutory disclosures that are no longer selected
+        $activeStatutoryTypes = array_column($statutoryDefs, 'type');
+        $statutoryPool = ['sellers_disclosure', 'lead_disclosure', 'condo_disclosure'];
+        $unselectedTypes = array_diff($statutoryPool, $activeStatutoryTypes);
+        if (!empty($unselectedTypes)) {
+            $listing->documents()->whereIn('type', $unselectedTypes)->delete();
         }
     }
 }

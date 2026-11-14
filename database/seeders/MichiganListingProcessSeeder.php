@@ -147,7 +147,11 @@ class MichiganListingProcessSeeder extends Seeder
             $allMiZipIds = array_values(array_unique($allMiZipIds));
 
             // 3. Find active Agent User
-            $agent = User::where('id', 2)->first() ?? User::where('email', 'agent@gmail.com')->first() ?? User::first();
+            $agent = User::where('email', 'agent@example.com')->first()
+                ?? User::where('email', 'agent@gmail.com')->first()
+                ?? User::where('role', \App\Enums\UserRole::Agent)->first()
+                ?? User::where('id', 2)->first()
+                ?? User::first();
 
             // 4. Create or Update Michigan Full Service MLS Package
             $michiganPackage = ServicePackage::updateOrCreate(

@@ -29,22 +29,62 @@ class EunoSignController extends Controller
         $user = $request->user();
 
         // Ensure user is seller of the listing or admin
-        if ($user->id !== $listing->user_id && $user->role !== 'admin') {
+        if ($user->id !== $listing->user_id && !$user->isAdmin()) {
             return api_error('Unauthorized to initiate signing for this listing.', 403);
         }
 
-        // Gather all physical files associated with listing documents
+        $forceRecreate = $request->boolean('force_recreate', false);
+        if (!$forceRecreate) {
+            $existing = ListingEunoAgreement::where('listing_id', $listing->id)
+                ->where('status', 'inprogress')
+                ->latest()
+                ->first();
+
+            if ($existing && !empty($existing->signing_url)) {
+                return api_success([
+                    'agreement_id' => $existing->id,
+                    'euno_agreement_id' => $existing->agreement_id,
+                    'signing_url' => $existing->signing_url,
+                    'status' => $existing->status,
+                    'signers' => $existing->signers,
+                ], 'Existing in-progress Eunodoc signature agreement retrieved.');
+            }
+        }
+
+        // Automatically provision and generate genuine statutory document PDFs
+        $discService = app(\App\Services\DisclosureService::class);
+        $discService->regenerateStatutoryDocuments($listing);
+        $docController = app(ListingDocumentController::class);
+        $answers = $discService->getAnswers($listing);
+
         $documents = ListingDocument::where('listing_id', $listing->id)->get();
         $filePaths = [];
 
         foreach ($documents as $doc) {
-            $fullPath = Storage::disk('local')->path($doc->path);
-            if (file_exists($fullPath)) {
-                $filePaths[] = $fullPath;
+            $pdfRelPath = "listings/{$listing->id}/statutory/{$doc->type}.pdf";
+            $fullPath = Storage::disk('local')->path($pdfRelPath);
+
+            // If statutory, render full PDF for EunoDoc
+            if (str_contains($doc->path, 'statutory') || in_array($doc->type, ['lead_disclosure', 'listing_agreement', 'agency_disclosure', 'sellers_disclosure', 'condo_disclosure'])) {
+                $refMethod = new \ReflectionMethod($docController, 'renderStatutoryHtml');
+                $refMethod->setAccessible(true);
+                $html = $refMethod->invoke($docController, $listing, $doc, $answers);
+
+                if (class_exists(\Barryvdh\DomPDF\Facade\Pdf::class)) {
+                    $pdfContent = \Barryvdh\DomPDF\Facade\Pdf::loadHTML($html)->output();
+                    Storage::disk('local')->put($pdfRelPath, $pdfContent);
+                    $filePaths[] = $fullPath;
+                    continue;
+                }
+            }
+
+            $storagePath = Storage::disk('local')->path($doc->path);
+            if (file_exists($storagePath)) {
+                $filePaths[] = $storagePath;
             }
         }
 
-        // If no documents exist yet, create a dummy placeholder disclosure so the flow proceeds
+        // If no documents exist yet, create a placeholder disclosure so the flow proceeds
         if (empty($filePaths)) {
             $dir = storage_app_path("listings/{$listing->id}/disclosures");
             if (!file_exists($dir)) {
@@ -75,7 +115,7 @@ class EunoSignController extends Controller
         }
 
         $agreementId = $agreementResponse['_id'];
-        $signingUrl = $this->eunoService->getSigningUrlForUser($agreementId, $user->email);
+        $signingUrl = $this->eunoService->getSigningUrlForUser($agreementId, $user->email, $agreementResponse['recipients'] ?? []);
 
         // Store agreement in database
         $agreement = ListingEunoAgreement::create([
@@ -175,7 +215,7 @@ class EunoSignController extends Controller
         $listing = $offer->listing;
 
         // Ensure user is buyer, seller, or admin
-        if ($user->id !== $offer->buyer_id && $user->id !== $listing->user_id && $user->role !== 'admin') {
+        if ($user->id !== $offer->buyer_id && $user->id !== $listing->user_id && !$user->isAdmin()) {
             return api_error('Unauthorized to initiate signing on this offer.', 403);
         }
 
@@ -226,7 +266,7 @@ class EunoSignController extends Controller
         }
 
         $agreementId = $agreementResponse['_id'];
-        $signingUrl = $this->eunoService->getSigningUrlForUser($agreementId, $user->email);
+        $signingUrl = $this->eunoService->getSigningUrlForUser($agreementId, $user->email, $agreementResponse['recipients'] ?? []);
 
         $agreement = ListingEunoAgreement::create([
             'listing_id' => $listing->id,
@@ -338,8 +378,17 @@ class EunoSignController extends Controller
      */
     public function downloadSignedDocument(ListingEunoAgreement $agreement): Response
     {
+        if ((!$agreement->signed_file_path || !Storage::disk('local')->exists($agreement->signed_file_path)) && $agreement->agreement_id) {
+            $signedPdf = $this->eunoService->getSignedDocument($agreement->agreement_id);
+            if ($signedPdf) {
+                $signedPath = "listings/{$agreement->listing_id}/signed/EunoSigned_Disclosures_{$agreement->id}.pdf";
+                Storage::disk('local')->put($signedPath, $signedPdf);
+                $agreement->update(['signed_file_path' => $signedPath]);
+            }
+        }
+
         if (!$agreement->signed_file_path || !Storage::disk('local')->exists($agreement->signed_file_path)) {
-            return response('Signed document not found', 404);
+            return response('Signed document not found or pending execution.', 404);
         }
 
         $content = Storage::disk('local')->get($agreement->signed_file_path);
@@ -354,8 +403,17 @@ class EunoSignController extends Controller
      */
     public function downloadAuditReport(ListingEunoAgreement $agreement): Response
     {
+        if ((!$agreement->audit_file_path || !Storage::disk('local')->exists($agreement->audit_file_path)) && $agreement->agreement_id) {
+            $auditPdf = $this->eunoService->getAuditReport($agreement->agreement_id);
+            if ($auditPdf) {
+                $auditPath = "listings/{$agreement->listing_id}/signed/EunoAuditReport_{$agreement->id}.pdf";
+                Storage::disk('local')->put($auditPath, $auditPdf);
+                $agreement->update(['audit_file_path' => $auditPath]);
+            }
+        }
+
         if (!$agreement->audit_file_path || !Storage::disk('local')->exists($agreement->audit_file_path)) {
-            return response('Audit report not found', 404);
+            return response('Audit report not found or pending execution.', 404);
         }
 
         $content = Storage::disk('local')->get($agreement->audit_file_path);
@@ -366,15 +424,35 @@ class EunoSignController extends Controller
     }
 
     /**
-     * Fallback minimal PDF string for testing/development.
+     * Fallback minimal PDF string or rendered PDF for testing/development.
      */
     protected function buildSampleDisclosurePdf(Listing $listing): string
     {
+        if (class_exists(\Barryvdh\DomPDF\Facade\Pdf::class)) {
+            $answers = app(\App\Services\DisclosureService::class)->getAnswers($listing);
+            $doc = $listing->documents()->first();
+            if ($doc) {
+                $controller = app(ListingDocumentController::class);
+                $refMethod = new \ReflectionMethod($controller, 'renderStatutoryHtml');
+                $refMethod->setAccessible(true);
+                $html = $refMethod->invoke($controller, $listing, $doc, $answers);
+                return \Barryvdh\DomPDF\Facade\Pdf::loadHTML($html)->output();
+            }
+        }
+
         return "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R/Resources<<>>>>endobj\nxref\n0 4\n0000000000 65535 f\n0000000010 00000 n\n0000000053 00000 n\n0000000102 00000 n\ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n178\n%%EOF";
     }
 
     protected function buildSampleOfferPdf(ListingOffer $offer): string
     {
+        if (class_exists(\Barryvdh\DomPDF\Facade\Pdf::class)) {
+            $controller = app(OfferController::class);
+            $refMethod = new \ReflectionMethod($controller, 'renderPurchaseAgreementHtml');
+            $refMethod->setAccessible(true);
+            $html = $refMethod->invoke($controller, $offer);
+            return \Barryvdh\DomPDF\Facade\Pdf::loadHTML($html)->output();
+        }
+
         return "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R/Resources<<>>>>endobj\nxref\n0 4\n0000000000 65535 f\n0000000010 00000 n\n0000000053 00000 n\n0000000102 00000 n\ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n178\n%%EOF";
     }
 }

@@ -27,6 +27,11 @@ class ListingProcessSeeder extends Seeder
                     'type' => 'default',
                     'status' => 'active',
                     'assigned_zips' => [],
+                    'required_disclosures' => [
+                        'mi_residential_appliances',
+                        'mi_residential_conditions',
+                        'lead_paint_disclosure',
+                    ],
                     'config' => ListingProcessDefinitions::getResidentialProcessConfig(),
                 ]
             );
@@ -41,6 +46,9 @@ class ListingProcessSeeder extends Seeder
                     'type' => 'default',
                     'status' => 'active',
                     'assigned_zips' => [],
+                    'required_disclosures' => [
+                        'mi_vacant_land_disclosure',
+                    ],
                     'config' => ListingProcessDefinitions::getVacantLandProcessConfig(),
                 ]
             );

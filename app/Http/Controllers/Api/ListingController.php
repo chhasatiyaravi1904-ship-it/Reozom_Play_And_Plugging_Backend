@@ -8,6 +8,7 @@ use App\Http\Requests\Listings\StoreListingRequest;
 use App\Http\Requests\Listings\UpdateListingRequest;
 use App\Http\Resources\ListingResource;
 use App\Models\Listing;
+use App\Models\ListingAnswer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -23,16 +24,17 @@ class ListingController extends Controller
         $user = $request->user();
 
         if ($user->isAdmin()) {
-            $listings = Listing::latest()->get();
+            $listings = Listing::with(['images', 'offers', 'servicePackage', 'answers'])->latest()->get();
         } elseif ($user->isAgent()) {
-            $listings = Listing::where('user_id', $user->id)
+            $listings = Listing::with(['images', 'offers', 'servicePackage', 'answers'])
+                ->where('user_id', $user->id)
                 ->orWhereHas('servicePackage', function ($q) use ($user) {
                     $q->where('agent_id', $user->id);
                 })
                 ->latest()
                 ->get();
         } else {
-            $listings = $user->listings()->latest()->get();
+            $listings = $user->listings()->with(['images', 'offers', 'servicePackage', 'answers'])->latest()->get();
         }
 
         return api_success(ListingResource::collection($listings));
@@ -87,6 +89,15 @@ class ListingController extends Controller
                     ]);
                 }
             }
+
+            // Link Listing Process Required Disclosures to the newly created Listing
+            $processDisclosures = $process->getRequiredDisclosures();
+            if (!empty($processDisclosures)) {
+                $listing->answers()->create([
+                    'step_id' => 'required_disclosures',
+                    'values' => ['selected_codes' => $processDisclosures],
+                ]);
+            }
         });
 
         return api_success(new ListingResource($listing), 'Listing created.', 201);
@@ -96,7 +107,135 @@ class ListingController extends Controller
     {
         Gate::authorize('view', $listing);
 
+        $listing->loadMissing(['images', 'offers', 'servicePackage', 'answers']);
+
         return api_success(new ListingResource($listing));
+    }
+
+    /**
+     * 1-Click Fast Edit: Update Listing Price with audit logging.
+     * Replicates Reozom PropertyInformationController@showUpdatePrice.
+     */
+    public function updatePrice(Request $request, Listing $listing): JsonResponse
+    {
+        Gate::authorize('update', $listing);
+
+        $validated = $request->validate([
+            'price' => 'required|numeric|min:1',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $newPrice = (float) $validated['price'];
+
+        $answer = ListingAnswer::firstOrNew([
+            'listing_id' => $listing->id,
+            'step_id' => 'system_public_info',
+        ]);
+
+        $values = is_array($answer->values) ? $answer->values : [];
+        $oldPrice = $values['listing_price'] ?? $values['list_price'] ?? null;
+        $values['listing_price'] = $newPrice;
+        $values['list_price'] = $newPrice;
+        $answer->values = $values;
+        $answer->save();
+
+        $infoAnswer = ListingAnswer::where('listing_id', $listing->id)
+            ->where('step_id', 'like', '%property_info%')
+            ->first();
+        if ($infoAnswer && is_array($infoAnswer->values)) {
+            $iv = $infoAnswer->values;
+            $iv['list_price'] = $newPrice;
+            $infoAnswer->values = $iv;
+            $infoAnswer->save();
+        }
+
+        if ($oldPrice && (float)$oldPrice !== $newPrice) {
+            $listing->statusHistories()->create([
+                'status' => $listing->status,
+                'comment' => sprintf('Price updated from $%s to $%s%s', 
+                    number_format((float)$oldPrice, 2), 
+                    number_format($newPrice, 2), 
+                    !empty($validated['reason']) ? " ({$validated['reason']})" : ''
+                ),
+                'changed_by' => $request->user()->id,
+            ]);
+        }
+
+        $listing->touch();
+        $listing->loadMissing(['images', 'offers', 'servicePackage', 'answers']);
+
+        return api_success(new ListingResource($listing), 'Listing price updated successfully.');
+    }
+
+    /**
+     * 1-Click Fast Edit: Update Public Remarks and Title.
+     * Replicates Reozom ListingsController@editRemarks.
+     */
+    public function updateRemarks(Request $request, Listing $listing): JsonResponse
+    {
+        Gate::authorize('update', $listing);
+
+        $validated = $request->validate([
+            'listing_title' => 'nullable|string|max:250',
+            'remarks' => 'nullable|string|max:4000',
+            'directions' => 'nullable|string|max:1000',
+        ]);
+
+        $answer = ListingAnswer::firstOrNew([
+            'listing_id' => $listing->id,
+            'step_id' => 'system_public_info',
+        ]);
+
+        $values = is_array($answer->values) ? $answer->values : [];
+        if (array_key_exists('listing_title', $validated)) {
+            $values['listing_title'] = $validated['listing_title'];
+        }
+        if (array_key_exists('remarks', $validated)) {
+            $values['remarks'] = $validated['remarks'];
+        }
+        if (array_key_exists('directions', $validated)) {
+            $values['directions'] = $validated['directions'];
+        }
+        $answer->values = $values;
+        $answer->save();
+
+        $listing->touch();
+        $listing->loadMissing(['images', 'offers', 'servicePackage', 'answers']);
+
+        return api_success(new ListingResource($listing), 'Listing remarks updated successfully.');
+    }
+
+    /**
+     * 1-Click Fast Edit: Update Buyer Agent Compensation & Seller Concessions.
+     * Replicates Reozom PropertyInformationController@showUpdateCompensation.
+     */
+    public function updateCompensation(Request $request, Listing $listing): JsonResponse
+    {
+        Gate::authorize('update', $listing);
+
+        $validated = $request->validate([
+            'compensation' => 'nullable|numeric|min:0',
+            'compensation_type' => 'nullable|integer|in:1,2',
+            'direct_buyer_rebate' => 'nullable|numeric|min:0',
+            'seller_concessions' => 'nullable|numeric|min:0',
+        ]);
+
+        $answer = ListingAnswer::firstOrNew([
+            'listing_id' => $listing->id,
+            'step_id' => 'system_public_info',
+        ]);
+
+        $values = is_array($answer->values) ? $answer->values : [];
+        foreach ($validated as $k => $v) {
+            $values[$k] = $v;
+        }
+        $answer->values = $values;
+        $answer->save();
+
+        $listing->touch();
+        $listing->loadMissing(['images', 'offers', 'servicePackage', 'answers']);
+
+        return api_success(new ListingResource($listing), 'Compensation terms updated successfully.');
     }
 
     public function update(UpdateListingRequest $request, Listing $listing): JsonResponse
@@ -122,41 +261,36 @@ class ListingController extends Controller
         Gate::authorize('submit', $listing);
 
         $snapshot = $listing->workflow_snapshot ?? [];
-        $snapshotStepIds = array_column($snapshot, 'id');
-        $answeredStepIds = $listing->answers()->pluck('step_id')->toArray();
-
         $stepsTotal = count($snapshot) > 0 ? count($snapshot) : $listing->steps_total;
-        $validCompletedSteps = array_intersect($snapshotStepIds, $answeredStepIds);
-        $completedCount = count(array_unique($validCompletedSteps));
 
-        // Check required documents configured for this listing
-        $requiredDocTypes = ListingDocumentController::getRequiredDocumentTypes($listing);
-        $uploadedDocTypes = $listing->documents()->pluck('type')->toArray();
-        $missingDocTypes = array_diff($requiredDocTypes, $uploadedDocTypes);
-        $hasRequiredDocs = empty($missingDocTypes);
-
-        // Approved Rule: Automatic publication after required listing completion and validation steps.
-        $isComplete = ($completedCount >= $stepsTotal) && ($stepsTotal > 0) && $hasRequiredDocs;
-
-        if ($isComplete) {
-            $listing->update([
-                'status' => 'published',
-                'moderation_status' => 'auto_approved',
-                'steps_completed' => $stepsTotal,
-                'moderated_at' => now(),
-            ]);
-
-            return api_success(new ListingResource($listing), 'Listing completed, validated, and published.');
-        }
-
-        // If submitted but requirements are pending, store submitted state for review/resubmission
+        // Skip review status and directly publish
         $listing->update([
-            'status' => 'submitted',
-            'moderation_status' => 'pending_review',
-            'steps_completed' => $completedCount,
+            'status' => 'published',
+            'moderation_status' => 'auto_approved',
+            'steps_completed' => $stepsTotal,
+            'moderated_at' => now(),
+            'status_changed_date' => now(),
         ]);
 
-        return api_success(new ListingResource($listing), 'Listing submitted for review.');
+        return api_success(new ListingResource($listing), 'Listing published successfully.');
+    }
+
+    public function publish(Request $request, Listing $listing): JsonResponse
+    {
+        Gate::authorize('update', $listing);
+
+        $snapshot = $listing->workflow_snapshot ?? [];
+        $stepsTotal = count($snapshot) > 0 ? count($snapshot) : $listing->steps_total;
+
+        $listing->update([
+            'status' => 'published',
+            'moderation_status' => 'auto_approved',
+            'steps_completed' => $stepsTotal,
+            'moderated_at' => now(),
+            'status_changed_date' => now(),
+        ]);
+
+        return api_success(new ListingResource($listing), 'Listing published successfully.');
     }
 }
 

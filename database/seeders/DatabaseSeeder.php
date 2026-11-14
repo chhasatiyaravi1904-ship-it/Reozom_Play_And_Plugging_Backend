@@ -17,11 +17,15 @@ class DatabaseSeeder extends Seeder
         $this->call(UserSeeder::class);
         $this->call(PermissionSeeder::class);
         $this->call(PackageSeeder::class);
+        $this->call(MlsSeeder::class);
         $this->call(StateSeeder::class);
         $this->call(CountySeeder::class);
         $this->call(CitySeeder::class);
         $this->call(ZipCodeSeeder::class);
         $this->call(ListingProcessSeeder::class);
         $this->call(MichiganListingProcessSeeder::class);
+        $this->call(PublishedListingSeeder::class);
+        $this->call(ReozomFullWorkflowSeeder::class);
+        $this->call(ReozomStatutoryDisclosuresSeeder::class);
     }
 }

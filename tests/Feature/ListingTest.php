@@ -130,7 +130,7 @@ class ListingTest extends TestCase
             ->postJson("/api/listings/{$listing->id}/submit");
 
         $response->assertOk();
-        $response->assertJsonPath('data.status', 'submitted');
+        $response->assertJsonPath('data.status', 'published');
     }
 
     public function test_listings_endpoints_require_authentication(): void

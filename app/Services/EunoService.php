@@ -31,6 +31,24 @@ class EunoService
         $this->mockMode = (bool) config('euno.mock_mode', false);
     }
 
+    public function getHttpClient(array $extraOptions = []): Client
+    {
+        $options = [
+            'timeout' => 30,
+        ];
+
+        $caBundle = base_path('cacert.pem');
+        if (file_exists($caBundle)) {
+            $options['verify'] = $caBundle;
+        } elseif (file_exists('C:\\php83\\extras\\ssl\\cacert.pem')) {
+            $options['verify'] = 'C:\\php83\\extras\\ssl\\cacert.pem';
+        } else {
+            $options['verify'] = true;
+        }
+
+        return new Client(array_merge($options, $extraOptions));
+    }
+
     /**
      * Send document(s) to Eunodoc API and return agreement data.
      *
@@ -129,7 +147,7 @@ class EunoService
                 'headers' => ['Content-Type' => 'application/json'],
             ];
 
-            $client = new Client();
+            $client = $this->getHttpClient();
             $multipartStream = new MultipartStream($multipart);
 
             $response = $client->request('POST', $endpoint, [
@@ -229,11 +247,10 @@ class EunoService
 
         try {
             $endpoint = rtrim($this->apiUrl, '/') . '/document/' . $agreementId;
-            $client = new Client();
+            $client = $this->getHttpClient(['timeout' => 15]);
 
             $response = $client->request('GET', $endpoint, [
                 'headers' => ['Authorization' => $this->authorizationToken],
-                'timeout' => 15,
             ]);
 
             return json_decode($response->getBody()->getContents(), true);
@@ -249,19 +266,24 @@ class EunoService
     /**
      * Construct specific signing URL for a given user email on an agreement.
      */
-    public function getSigningUrlForUser(string $agreementId, string $userEmail): ?string
+    public function getSigningUrlForUser(string $agreementId, string $userEmail, ?array $recipients = null): ?string
     {
-        $details = $this->getDocumentUrl($agreementId);
-        if (!$details) {
-            return null;
+        if (empty($recipients)) {
+            $details = $this->getDocumentUrl($agreementId);
+            if (!$details) {
+                return null;
+            }
+            $docId = $details['_id'] ?? $agreementId;
+            $recipients = $details['recipients'] ?? [];
+        } else {
+            $docId = $agreementId;
         }
 
-        $docId = $details['_id'] ?? $agreementId;
         $recipientId = '0';
 
-        if (!empty($details['recipients']) && is_array($details['recipients'])) {
-            $recipientId = $details['recipients'][0]['_id'] ?? '0';
-            foreach ($details['recipients'] as $signer) {
+        if (!empty($recipients) && is_array($recipients)) {
+            $recipientId = $recipients[0]['_id'] ?? '0';
+            foreach ($recipients as $signer) {
                 if (strcasecmp($signer['email'] ?? '', $userEmail) === 0) {
                     $recipientId = $signer['_id'] ?? $recipientId;
                     break;
@@ -283,11 +305,10 @@ class EunoService
 
         try {
             $endpoint = rtrim($this->apiUrl, '/') . '/document/' . $agreementId;
-            $client = new Client();
+            $client = $this->getHttpClient(['timeout' => 15]);
 
             $response = $client->request('GET', $endpoint, [
                 'headers' => ['Authorization' => $this->authorizationToken],
-                'timeout' => 15,
             ]);
 
             $responseData = json_decode($response->getBody()->getContents(), true);
@@ -312,11 +333,10 @@ class EunoService
 
         try {
             $endpoint = rtrim($this->apiUrl, '/') . '/pdf/' . $agreementId . '/download';
-            $client = new Client();
+            $client = $this->getHttpClient(['timeout' => 30]);
 
             $response = $client->request('GET', $endpoint, [
                 'headers' => ['Authorization' => $this->authorizationToken],
-                'timeout' => 30,
             ]);
 
             return $response->getBody()->getContents();
@@ -340,14 +360,13 @@ class EunoService
 
         try {
             $endpoint = rtrim($this->apiUrl, '/') . '/pdf/' . $agreementId . '/audit';
-            $client = new Client();
+            $client = $this->getHttpClient(['timeout' => 20]);
 
             $response = $client->request('GET', $endpoint, [
                 'headers' => [
                     'Authorization' => $this->authorizationToken,
                     'Content-Type' => 'application/pdf',
                 ],
-                'timeout' => 20,
             ]);
 
             return $response->getBody()->getContents();
@@ -367,11 +386,10 @@ class EunoService
     {
         try {
             $endpoint = rtrim($this->apiUrl, '/') . '/document/' . $agreementId . '/cancel';
-            $client = new Client();
+            $client = $this->getHttpClient(['timeout' => 15]);
 
             $response = $client->request('POST', $endpoint, [
                 'headers' => ['Authorization' => $this->authorizationToken],
-                'timeout' => 15,
             ]);
 
             return json_decode($response->getBody()->getContents(), true);
@@ -455,11 +473,12 @@ class EunoService
 
     protected function generateMockAgreement(string $documentName, array $signers): array
     {
-        $mockId = 'mock_' . uniqid();
+        // Generate a 24-char hex string complying with MongoDB ObjectId specification
+        $mockId = substr(md5('mock_doc_' . uniqid('', true)), 0, 24);
         $recipients = [];
         foreach ($signers as $idx => $s) {
             $recipients[] = [
-                '_id' => 'rec_' . ($idx + 1) . '_' . uniqid(),
+                '_id' => substr(md5('mock_rec_' . $idx . '_' . uniqid('', true)), 0, 24),
                 'email' => $s['email'],
                 'type' => $s['type'] ?? 'signer',
                 'status' => 'pending',
@@ -483,7 +502,7 @@ class EunoService
             'status' => 'completed',
             'recipients' => [
                 [
-                    '_id' => 'rec_1_signer',
+                    '_id' => substr(md5('mock_rec_signer_' . $agreementId), 0, 24),
                     'email' => auth()->user()?->email ?? 'signer@reozom.com',
                     'status' => 'completed',
                     'signed_at' => now()->toIso8601String(),

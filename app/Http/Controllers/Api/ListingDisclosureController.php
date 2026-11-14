@@ -18,11 +18,15 @@ class ListingDisclosureController extends Controller
     {
         Gate::authorize('view', $listing);
 
-        $steps = $disclosureService->getDisclosureSchema($listing);
+        $available = $disclosureService->getAvailableDisclosuresForListing($listing);
+        $selectedCodes = $disclosureService->getSelectedDisclosureCodes($listing);
+        $steps = $disclosureService->getDisclosureSchema($listing, $selectedCodes);
         $answers = $disclosureService->getAnswers($listing);
 
         return api_success([
             'listingId' => $listing->id,
+            'availableDisclosures' => $available,
+            'selectedDisclosures' => $selectedCodes,
             'steps' => $steps,
             'answers' => $answers,
         ]);
@@ -37,14 +41,48 @@ class ListingDisclosureController extends Controller
 
         $validated = $request->validate([
             'answers' => 'required|array',
+            'selectedDisclosures' => 'nullable|array',
+            'selectedDisclosures.*' => 'string',
         ]);
 
-        $disclosureService->saveDisclosures($listing, $validated['answers']);
+        $selectedCodes = $validated['selectedDisclosures'] ?? null;
+        $disclosureService->saveDisclosures($listing, $validated['answers'], $selectedCodes);
 
         return api_success([
             'listingId' => $listing->id,
+            'selectedDisclosures' => $disclosureService->getSelectedDisclosureCodes($listing),
             'answers' => $disclosureService->getAnswers($listing),
             'documents' => $listing->documents()->get(),
         ], 'Disclosures saved and statutory documents generated successfully.');
+    }
+
+    /**
+     * Update only the required disclosure document selection for this listing.
+     */
+    public function select(Request $request, Listing $listing, DisclosureService $disclosureService): JsonResponse
+    {
+        Gate::authorize('update', $listing);
+
+        $validated = $request->validate([
+            'selectedDisclosures' => 'required|array',
+            'selectedDisclosures.*' => 'string',
+        ]);
+
+        $selectedCodes = array_values(array_unique($validated['selectedDisclosures']));
+
+        $listing->answers()->updateOrCreate(
+            ['step_id' => 'required_disclosures'],
+            ['values' => ['selected_codes' => $selectedCodes]]
+        );
+
+        $steps = $disclosureService->getDisclosureSchema($listing, $selectedCodes);
+        $available = $disclosureService->getAvailableDisclosuresForListing($listing);
+
+        return api_success([
+            'listingId' => $listing->id,
+            'availableDisclosures' => $available,
+            'selectedDisclosures' => $selectedCodes,
+            'steps' => $steps,
+        ], 'Required disclosure selection updated.');
     }
 }

@@ -43,6 +43,27 @@ class ListingWorkflowController extends Controller
             ['values' => $values]
         );
 
+        // Sync core address and property type fields to listing record
+        $updates = [];
+        if (!empty($values['street_address']) && empty($listing->address)) {
+            $updates['address'] = $values['street_address'];
+        }
+        if (!empty($values['city']) && empty($listing->city)) {
+            $updates['city'] = $values['city'];
+        }
+        if (!empty($values['zip']) && empty($listing->zip)) {
+            $updates['zip'] = $values['zip'];
+        }
+        if (empty($listing->state)) {
+            $stateVal = $values['state_id'] ?? $values['state'] ?? null;
+            if ($stateVal) {
+                $updates['state'] = in_array((string)$stateVal, ['23', 'MI']) ? 'MI' : (in_array((string)$stateVal, ['10', 'FL']) ? 'FL' : (string)$stateVal);
+            }
+        }
+        if (!empty($updates)) {
+            $listing->update($updates);
+        }
+
         $workflowService->calculateCompletedSteps($listing);
 
         // Approved Rule: Editing a published listing unpublishes it until revalidated and resubmitted

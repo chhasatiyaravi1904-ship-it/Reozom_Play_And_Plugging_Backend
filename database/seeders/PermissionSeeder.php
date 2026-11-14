@@ -50,5 +50,6 @@ class PermissionSeeder extends Seeder
 
         User::where('email', 'admin@example.com')->first()?->syncRoles([$superAdmin]);
         User::where('email', 'agent@example.com')->first()?->syncRoles([$contentManager]);
+        User::where('email', 'agent@gmail.com')->first()?->syncRoles([$contentManager]);
     }
 }
