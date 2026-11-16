@@ -138,13 +138,12 @@ class FloridaListingProcessSeeder extends Seeder
             $residentialCodes = ['fl_residential_single_family', 'fl_residential_condo', 'lead_paint_disclosure'];
             $vacantLandCodes = ['fl_vacant_land_disclosure'];
 
-            ListingProcess::updateOrCreate(
+            $flResidentialProcess = ListingProcess::updateOrCreate(
                 ['name' => 'Florida Residential Listing Process'],
                 [
                     'type' => 'default',
                     'status' => 'active',
                     'agent_id' => null,
-                    'service_package_id' => $floridaPackage->id,
                     'assigned_zips' => $zipStrings,
                     'required_disclosures' => $residentialCodes,
                     'config' => ListingProcessDefinitions::withDisclosureSteps(
@@ -155,13 +154,17 @@ class FloridaListingProcessSeeder extends Seeder
                 ]
             );
 
+            // Sellers of the Florida package use this process unless the package already has one.
+            if ($floridaPackage->listing_process_id === null) {
+                $floridaPackage->update(['listing_process_id' => $flResidentialProcess->id]);
+            }
+
             ListingProcess::updateOrCreate(
                 ['name' => 'Florida Vacant Land Listing Process'],
                 [
                     'type' => 'default',
                     'status' => 'active',
                     'agent_id' => null,
-                    'service_package_id' => null,
                     'assigned_zips' => $zipStrings,
                     'required_disclosures' => $vacantLandCodes,
                     'config' => ListingProcessDefinitions::withDisclosureSteps(

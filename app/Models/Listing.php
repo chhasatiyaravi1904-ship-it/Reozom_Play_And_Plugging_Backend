@@ -173,6 +173,97 @@ class Listing extends Model
         return $this->hasMany(ListingDocument::class);
     }
 
+    /**
+     * Everyone who must e-sign this listing's documents, in Reozom's order:
+     * signer 1 is the titled owner (by owner type, falling back to the account holder),
+     * followed by the additional owners / co-signers.
+     *
+     * @return array<int, array{name: string, email: string}>
+     */
+    public function eSignSigners(): array
+    {
+        // The address step holds the owner fields; other steps are only a fallback.
+        $values = [];
+        $answers = $this->answers()
+            ->orderByRaw("CASE WHEN step_id = 'step_property_type_address' THEN 0 ELSE 1 END")
+            ->get();
+        foreach ($answers as $answer) {
+            if (is_array($answer->values)) {
+                $values += $answer->values;
+            }
+        }
+
+        $text = fn (string $key) => trim((string) (is_scalar($values[$key] ?? null) ? $values[$key] : ''));
+
+        [$nameKey, $emailKey] = match ($text('owner_type')) {
+            'private' => ['owner_type_name', 'owner_type_email'],
+            'trust' => ['owner_type_trust_name', 'owner_type_trust_email'],
+            'corporation' => ['owner_type_company_name', 'owner_type_company_email'],
+            default => [null, null],
+        };
+
+        $primaryEmail = $emailKey ? $text($emailKey) : '';
+        if (! filter_var($primaryEmail, FILTER_VALIDATE_EMAIL)) {
+            $primaryEmail = (string) $this->user?->email;
+        }
+        $primaryName = ($nameKey ? $text($nameKey) : '') ?: (string) ($this->user?->name ?: $primaryEmail);
+
+        $signers = [];
+        $add = function (string $name, string $email) use (&$signers) {
+            $email = strtolower(trim($email));
+            if ($email === '' || isset($signers[$email])) {
+                return;
+            }
+            $signers[$email] = ['name' => trim($name) ?: $email, 'email' => $email];
+        };
+
+        $add($primaryName, $primaryEmail);
+
+        foreach (self::parseAdditionalSigners($values['additional_signers'] ?? null) as $signer) {
+            $add($signer['name'], $signer['email']);
+        }
+
+        return array_values($signers);
+    }
+
+    /**
+     * Additional signers are entered as one "Name email" per line (or a list of {name, email}).
+     * Lines without a valid email are skipped because EunoDoc can't send them a signing link.
+     *
+     * @return array<int, array{name: string, email: string}>
+     */
+    public static function parseAdditionalSigners(mixed $raw): array
+    {
+        $entries = [];
+
+        if (is_array($raw)) {
+            foreach ($raw as $item) {
+                if (is_array($item)) {
+                    $entries[] = trim(($item['name'] ?? '').' '.($item['email'] ?? ''));
+                } elseif (is_string($item)) {
+                    $entries[] = $item;
+                }
+            }
+        } elseif (is_string($raw)) {
+            $entries = preg_split('/[\r\n;]+/', $raw) ?: [];
+        }
+
+        $signers = [];
+        foreach ($entries as $entry) {
+            if (! preg_match('/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}/i', $entry, $match)) {
+                continue;
+            }
+            $email = $match[0];
+            if (! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                continue;
+            }
+            $name = trim(str_replace($email, '', $entry), " \t,;:|-<>()[]");
+            $signers[] = ['name' => $name, 'email' => $email];
+        }
+
+        return $signers;
+    }
+
     public function statusHistories()
     {
         return $this->hasMany(ListingStatusHistory::class)->orderBy('created_at', 'desc');

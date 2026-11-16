@@ -66,6 +66,51 @@ class ListingProcessController extends Controller
         return null;
     }
 
+    /**
+     * An agent can only link their own packages to a process.
+     */
+    private function denyForeignPackages($user, array $packageIds)
+    {
+        if ($packageIds === [] || ! $user->isAgent()) {
+            return null;
+        }
+
+        $owned = \App\Models\ServicePackage::whereIn('id', $packageIds)
+            ->where('agent_id', $user->id)
+            ->count();
+
+        return $owned === count($packageIds) ? null : response()->json([
+            'message' => 'You can only link your own service packages.',
+            'errors' => ['service_package_ids' => ['You can only link your own service packages.']],
+        ], 422);
+    }
+
+    /**
+     * Make exactly these packages use the process. Each package has one process, so a package
+     * picked here moves from its previous process; packages no longer picked are unlinked.
+     */
+    private function syncServicePackages(ListingProcess $process, array $packageIds): void
+    {
+        \App\Models\ServicePackage::where('listing_process_id', $process->id)
+            ->whereNotIn('id', $packageIds ?: [0])
+            ->update(['listing_process_id' => null]);
+
+        if ($packageIds !== []) {
+            \App\Models\ServicePackage::whereIn('id', $packageIds)->update(['listing_process_id' => $process->id]);
+        }
+    }
+
+    /**
+     * Process as returned by the API, with the IDs of the packages it serves.
+     */
+    private function processPayload(ListingProcess $process): array
+    {
+        $ids = $process->servicePackageIds();
+        $process->unsetRelation('servicePackages');
+
+        return $process->toArray() + ['service_package_ids' => $ids];
+    }
+
     private function denyAgentPackageLimit($user)
     {
         $blocker = ListingProcess::agentCreationBlocker($user);
@@ -152,7 +197,7 @@ class ListingProcessController extends Controller
             return response()->json(['message' => 'Unauthorized'], 403);
         }
 
-        $query = ListingProcess::with('agent:id,first_name,last_name');
+        $query = ListingProcess::with(['agent:id,first_name,last_name', 'servicePackages:id,listing_process_id']);
 
         if ($user->isAgent()) {
             $query->where('agent_id', $user->id)
@@ -163,7 +208,7 @@ class ListingProcessController extends Controller
             $query->whereNull('agent_id');
         }
 
-        return response()->json($query->get());
+        return response()->json($query->get()->map(fn (ListingProcess $p) => $this->processPayload($p)));
     }
 
     /**
@@ -231,6 +276,34 @@ class ListingProcessController extends Controller
 
         $validated = $request->validated();
 
+        $packageIds = array_values(array_unique(array_map('intval', $validated['service_package_ids'] ?? [])));
+        unset($validated['service_package_ids']);
+        if ($error = $this->denyForeignPackages($user, $packageIds)) {
+            return $error;
+        }
+
+        // Start from a System Default: copy its steps and document settings; the disclosures
+        // chosen in the form (or the base's own when none are sent) are synced on top below.
+        $baseId = $validated['base_process_id'] ?? null;
+        unset($validated['base_process_id']);
+        if ($baseId) {
+            $base = ListingProcess::find($baseId);
+            if (! $base || ! $base->isSystemDefault() || $base->status !== 'active') {
+                return response()->json([
+                    'message' => 'Choose one of the System Default processes to start from.',
+                    'errors' => ['base_process_id' => ['Choose one of the System Default processes to start from.']],
+                ], 422);
+            }
+
+            $validated['config'] = empty($validated['config']) ? ($base->config ?? []) : $validated['config'];
+            if (! array_key_exists('documents', $validated)) {
+                $validated['documents'] = $base->documents;
+            }
+            if (! $request->has('required_disclosures')) {
+                $validated['required_disclosures'] = $base->getRequiredDisclosures();
+            }
+        }
+
         if ($user->isAgent()) {
             $validated['agent_id'] = $user->id;
 
@@ -256,9 +329,14 @@ class ListingProcessController extends Controller
             $query->update(['type' => 'custom']);
         }
 
-        $process = ListingProcess::create($validated);
+        $process = \Illuminate\Support\Facades\DB::transaction(function () use ($validated, $packageIds) {
+            $process = ListingProcess::create($validated);
+            $this->syncServicePackages($process, $packageIds);
 
-        return response()->json($process, 201);
+            return $process;
+        });
+
+        return response()->json($this->processPayload($process), 201);
     }
 
     /**
@@ -282,7 +360,7 @@ class ListingProcessController extends Controller
             return response()->json(['message' => 'Unauthorized'], 403);
         }
 
-        return response()->json($listingProcess->load('agent:id,first_name,last_name'));
+        return response()->json($this->processPayload($listingProcess->load('agent:id,first_name,last_name')));
     }
 
     /**
@@ -306,6 +384,14 @@ class ListingProcessController extends Controller
 
         $validated = $request->validated();
 
+        // Packages are only synced when the list is sent; other saves (e.g. the builder) leave them alone.
+        $hasPackages = $request->has('service_package_ids');
+        $packageIds = array_values(array_unique(array_map('intval', $validated['service_package_ids'] ?? [])));
+        unset($validated['service_package_ids'], $validated['base_process_id']);
+        if ($error = $this->denyForeignPackages($user, $packageIds)) {
+            return $error;
+        }
+
         if ($request->user()->isAgent()) {
             unset($validated['agent_id']);
         }
@@ -322,9 +408,14 @@ class ListingProcessController extends Controller
             $query->update(['type' => 'custom']);
         }
 
-        $listingProcess->update($validated);
+        \Illuminate\Support\Facades\DB::transaction(function () use ($validated, $listingProcess, $hasPackages, $packageIds) {
+            $listingProcess->update($validated);
+            if ($hasPackages) {
+                $this->syncServicePackages($listingProcess, $packageIds);
+            }
+        });
 
-        return response()->json($listingProcess);
+        return response()->json($this->processPayload($listingProcess));
     }
 
     /**

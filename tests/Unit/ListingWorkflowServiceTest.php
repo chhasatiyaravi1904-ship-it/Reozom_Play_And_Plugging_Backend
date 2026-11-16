@@ -39,9 +39,9 @@ class ListingWorkflowServiceTest extends TestCase
             'type' => 'custom',
             'status' => 'active',
             'agent_id' => $this->agent1->id,
-            'service_package_id' => $this->package1->id,
             'config' => [['step' => 1]],
         ]);
+        $this->package1->update(['listing_process_id' => $customProcess->id]);
 
         $resolved = $this->service->resolveListingProcess($this->package1);
 
@@ -82,14 +82,14 @@ class ListingWorkflowServiceTest extends TestCase
     public function test_package_belonging_to_another_agent()
     {
         // Setup custom process for agent1
-        ListingProcess::create([
+        $customProcess = ListingProcess::create([
             'name' => 'Custom',
             'type' => 'custom',
             'status' => 'active',
             'agent_id' => $this->agent1->id,
-            'service_package_id' => $this->package1->id,
             'config' => [['step' => 1]],
         ]);
+        $this->package1->update(['listing_process_id' => $customProcess->id]);
 
         $package2 = ServicePackage::create([
             'agent_id' => $this->agent2->id,
@@ -105,14 +105,14 @@ class ListingWorkflowServiceTest extends TestCase
 
     public function test_process_with_empty_config_throws_exception()
     {
-        ListingProcess::create([
+        $emptyProcess = ListingProcess::create([
             'name' => 'Custom',
             'type' => 'custom',
             'status' => 'active',
             'agent_id' => $this->agent1->id,
-            'service_package_id' => $this->package1->id,
             'config' => [], // Empty config
         ]);
+        $this->package1->update(['listing_process_id' => $emptyProcess->id]);
 
         $this->expectException(\Exception::class);
         $this->expectExceptionMessage('The selected service package does not have an active listing process.');

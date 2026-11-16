@@ -52,10 +52,10 @@ class ListingWorkflowTest extends TestCase
         
         $process = ListingProcess::factory()->create([
             'agent_id' => $agent->id,
-            'service_package_id' => $package->id,
             'status' => 'active',
             'config' => [['id' => 'step1'], ['id' => 'step2']]
         ]);
+        $package->update(['listing_process_id' => $process->id]);
 
         $response = $this->actingAs($seller)->postJson('/api/listings', [
             'zip' => '12345',

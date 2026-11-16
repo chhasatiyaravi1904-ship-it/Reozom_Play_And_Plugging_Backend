@@ -11,6 +11,7 @@ class ServicePackage extends Model
 
     protected $fillable = [
         'agent_id',
+        'listing_process_id',
         'name',
         'description',
         'price',
@@ -32,8 +33,11 @@ class ServicePackage extends Model
         return $this->belongsToMany(ZipCode::class, 'service_package_zip_code');
     }
 
+    /**
+     * The listing process sellers of this package go through (several packages may share one).
+     */
     public function listingProcess()
     {
-        return $this->hasOne(ListingProcess::class);
+        return $this->belongsTo(ListingProcess::class);
     }
 }

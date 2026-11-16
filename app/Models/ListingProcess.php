@@ -14,7 +14,6 @@ class ListingProcess extends Model
         'type',
         'status',
         'agent_id',
-        'service_package_id',
         'assigned_zips',
         'config',
         'required_disclosures',
@@ -258,7 +257,6 @@ class ListingProcess extends Model
             'type' => 'custom',
             'status' => 'active',
             'agent_id' => $agentId,
-            'service_package_id' => null,
             'assigned_zips' => $this->assigned_zips ?? [],
             'required_disclosures' => $this->getRequiredDisclosures(),
             'documents' => $this->documents,
@@ -438,8 +436,21 @@ class ListingProcess extends Model
         return $this->belongsTo(User::class, 'agent_id');
     }
 
-    public function servicePackage()
+    /**
+     * Service packages whose sellers use this process (one process can serve many packages).
+     */
+    public function servicePackages()
     {
-        return $this->belongsTo(ServicePackage::class);
+        return $this->hasMany(ServicePackage::class);
+    }
+
+    /**
+     * IDs of the packages linked to this process, exposed to the API as `service_package_ids`.
+     */
+    public function servicePackageIds(): array
+    {
+        $packages = $this->relationLoaded('servicePackages') ? $this->servicePackages : $this->servicePackages()->get(['id']);
+
+        return $packages->pluck('id')->sort()->values()->all();
     }
 }

@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Listing;
 use App\Models\PropertyDisclosure;
+use App\Models\State;
 use App\Models\User;
 use App\Services\DisclosureService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -41,6 +42,8 @@ class AdminDisclosureManagementTest extends TestCase
 
     public function test_admin_can_list_and_create_dynamic_disclosures(): void
     {
+        State::factory()->create(['code' => 'FL', 'name' => 'Florida', 'slug' => 'florida']);
+
         $payload = [
             'title' => 'Florida Hurricane & Flood Disclosure',
             'code' => 'fl_hurricane_flood',
@@ -121,6 +124,115 @@ class AdminDisclosureManagementTest extends TestCase
         $deleteRes = $this->actingAs($this->admin)->deleteJson("/api/admin/disclosures/{$disclosure->id}");
         $deleteRes->assertStatus(200);
         $this->assertDatabaseMissing('property_disclosures', ['id' => $disclosure->id]);
+    }
+
+    private function minimalPayload(array $overrides = []): array
+    {
+        return array_merge([
+            'title' => 'Septic Disclosure',
+            'schema' => ['sections' => [['id' => 's1', 'name' => 'General', 'fields' => []]]],
+        ], $overrides);
+    }
+
+    public function test_state_scope_must_be_a_known_state_or_all_states(): void
+    {
+        State::factory()->create(['code' => 'MI', 'name' => 'Michigan', 'slug' => 'michigan']);
+
+        $this->actingAs($this->admin)
+            ->postJson('/api/admin/disclosures', $this->minimalPayload(['state_code' => 'XX']))
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('state_code');
+
+        $this->actingAs($this->admin)
+            ->postJson('/api/admin/disclosures', $this->minimalPayload(['code' => 'mi_one', 'state_code' => 'mi']))
+            ->assertStatus(201);
+        $this->assertDatabaseHas('property_disclosures', ['code' => 'mi_one', 'state_code' => 'MI']);
+
+        $this->actingAs($this->admin)
+            ->postJson('/api/admin/disclosures', $this->minimalPayload(['code' => 'all_one', 'state_code' => 'ALL']))
+            ->assertStatus(201);
+        $this->assertDatabaseHas('property_disclosures', ['code' => 'all_one', 'state_code' => null]);
+
+        $this->actingAs($this->admin)
+            ->postJson('/api/admin/disclosures', $this->minimalPayload(['code' => 'none_one', 'state_code' => null]))
+            ->assertStatus(201);
+        $this->assertDatabaseHas('property_disclosures', ['code' => 'none_one', 'state_code' => null]);
+    }
+
+    public function test_update_rejects_unknown_state_and_allows_switching_to_all_states(): void
+    {
+        State::factory()->create(['code' => 'MI', 'name' => 'Michigan', 'slug' => 'michigan']);
+        $disclosure = PropertyDisclosure::create([
+            'title' => 'Scoped', 'code' => 'scoped', 'state_code' => 'MI',
+            'category' => 'statutory', 'is_active' => true, 'is_required' => true,
+            'schema' => ['sections' => []],
+        ]);
+
+        $this->actingAs($this->admin)
+            ->putJson("/api/admin/disclosures/{$disclosure->id}", ['state_code' => 'ZZ'])
+            ->assertStatus(422);
+        $this->assertSame('MI', $disclosure->fresh()->state_code);
+
+        $this->actingAs($this->admin)
+            ->putJson("/api/admin/disclosures/{$disclosure->id}", ['state_code' => null])
+            ->assertStatus(200);
+        $this->assertNull($disclosure->fresh()->state_code);
+    }
+
+    public function test_new_disclosure_defaults_when_admin_form_omits_hidden_fields(): void
+    {
+        PropertyDisclosure::create([
+            'title' => 'Existing', 'code' => 'existing', 'order' => 7,
+            'category' => 'statutory', 'is_active' => true, 'is_required' => true,
+            'schema' => ['sections' => []],
+        ]);
+
+        $this->actingAs($this->admin)
+            ->postJson('/api/admin/disclosures', $this->minimalPayload(['code' => 'fresh_one']))
+            ->assertStatus(201);
+
+        $fresh = PropertyDisclosure::where('code', 'fresh_one')->first();
+        $this->assertSame(8, $fresh->order);
+        $this->assertFalse($fresh->is_required);
+        $this->assertSame('custom', $fresh->category);
+        $this->assertTrue($fresh->is_active);
+    }
+
+    public function test_update_without_hidden_fields_keeps_existing_values(): void
+    {
+        $disclosure = PropertyDisclosure::create([
+            'title' => 'Seeded', 'code' => 'seeded', 'order' => 3,
+            'category' => 'statutory', 'is_active' => true, 'is_required' => true,
+            'schema' => ['sections' => []],
+        ]);
+
+        $this->actingAs($this->admin)
+            ->putJson("/api/admin/disclosures/{$disclosure->id}", ['title' => 'Seeded Renamed'])
+            ->assertStatus(200);
+
+        $fresh = $disclosure->fresh();
+        $this->assertSame('statutory', $fresh->category);
+        $this->assertSame(3, $fresh->order);
+        $this->assertTrue($fresh->is_required);
+        $this->assertTrue($fresh->is_active);
+    }
+
+    public function test_duplicate_is_placed_at_end_of_list(): void
+    {
+        $first = PropertyDisclosure::create([
+            'title' => 'First', 'code' => 'first', 'order' => 1,
+            'category' => 'statutory', 'is_active' => true, 'is_required' => true,
+            'schema' => ['sections' => []],
+        ]);
+        PropertyDisclosure::create([
+            'title' => 'Second', 'code' => 'second', 'order' => 2,
+            'category' => 'statutory', 'is_active' => true, 'is_required' => true,
+            'schema' => ['sections' => []],
+        ]);
+
+        $res = $this->actingAs($this->admin)->postJson("/api/admin/disclosures/{$first->id}/duplicate");
+        $res->assertStatus(201);
+        $this->assertSame(3, PropertyDisclosure::find($res->json('data.id'))->order);
     }
 
     public function test_listing_loads_dynamic_admin_disclosures(): void

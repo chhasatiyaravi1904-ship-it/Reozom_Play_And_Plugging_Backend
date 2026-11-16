@@ -6,6 +6,7 @@ use App\Enums\UserRole;
 use App\Models\AgentPackage;
 use App\Models\ListingProcess;
 use App\Models\Package;
+use App\Models\ServicePackage;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -41,13 +42,13 @@ class ServicePackageProcessLinkTest extends TestCase
             'listing_process_id' => $this->default->id,
         ])->assertCreated()->json('id');
 
-        $copy = ListingProcess::where('service_package_id', $packageId)->firstOrFail();
+        $copy = ListingProcess::findOrFail(ServicePackage::findOrFail($packageId)->listing_process_id);
         $this->assertNotSame($this->default->id, $copy->id);
         $this->assertSame($this->agent->id, $copy->agent_id);
         $this->assertSame('custom', $copy->type);
         $this->assertSame('Florida Vacant Land Listing Process - FL Land Package', $copy->name);
         $this->assertEquals($this->default->config, $copy->config);
-        $this->assertNull($this->default->refresh()->service_package_id);
+        $this->assertSame(0, $this->default->servicePackages()->count());
     }
 
     public function test_resaving_a_package_does_not_create_another_copy(): void
@@ -56,7 +57,7 @@ class ServicePackageProcessLinkTest extends TestCase
             'name' => 'FL Land Package',
             'listing_process_id' => $this->default->id,
         ])->assertCreated()->json('id');
-        $copyId = ListingProcess::where('service_package_id', $packageId)->value('id');
+        $copyId = ServicePackage::findOrFail($packageId)->listing_process_id;
         $count = ListingProcess::count();
 
         $this->actingAs($this->agent)->putJson("/api/agent/service-packages/{$packageId}", [
@@ -65,7 +66,7 @@ class ServicePackageProcessLinkTest extends TestCase
         ])->assertOk();
 
         $this->assertSame($count, ListingProcess::count());
-        $this->assertSame($packageId, ListingProcess::find($copyId)->service_package_id);
+        $this->assertSame($copyId, ServicePackage::findOrFail($packageId)->listing_process_id);
     }
 
     public function test_agent_cannot_link_another_agents_process(): void
@@ -78,7 +79,7 @@ class ServicePackageProcessLinkTest extends TestCase
             'listing_process_id' => $othersProcess->id,
         ])->assertStatus(422)->assertJsonValidationErrors('listing_process_id');
 
-        $this->assertNull($othersProcess->refresh()->service_package_id);
+        $this->assertSame(0, $othersProcess->servicePackages()->count());
         $this->assertDatabaseMissing('service_packages', ['name' => 'Sneaky']);
     }
 
@@ -110,7 +111,7 @@ class ServicePackageProcessLinkTest extends TestCase
             'listing_process_id' => $copyId,
         ])->assertCreated()->json('id');
 
-        $this->assertSame($packageId, ListingProcess::find($copyId)->service_package_id);
-        $this->assertNull($this->default->refresh()->service_package_id);
+        $this->assertSame($copyId, ServicePackage::findOrFail($packageId)->listing_process_id);
+        $this->assertSame(0, $this->default->servicePackages()->count());
     }
 }

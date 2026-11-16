@@ -13,6 +13,14 @@ class EunoSignTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        // No real EunoDoc in tests; failures no longer silently fall back to a mock agreement.
+        config(['euno.mock_mode' => true]);
+    }
+
     public function test_seller_can_initiate_euno_signing_for_listing(): void
     {
         $seller = User::factory()->create(['role' => 'seller']);

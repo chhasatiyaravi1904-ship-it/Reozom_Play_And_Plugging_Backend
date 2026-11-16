@@ -22,188 +22,216 @@ class EunoSignController extends Controller
     ) {}
 
     /**
-     * Initiate EunoDoc e-sign flow for a listing's documents packet.
+     * Send the listing's unsigned documents to EunoDoc as one "Reozom Documents" agreement,
+     * with every signer (titled owner + additional signers), as Reozom does.
      */
     public function initiateListingSigning(Request $request, Listing $listing): JsonResponse
     {
         $user = $request->user();
 
-        // Ensure user is seller of the listing or admin
-        if ($user->id !== $listing->user_id && !$user->isAdmin()) {
+        if ($user->id !== $listing->user_id && ! $user->isAdmin()) {
             return api_error('Unauthorized to initiate signing for this listing.', 403);
         }
 
+        $signers = $listing->eSignSigners();
+        if ($signers === []) {
+            return api_error('No signer email found. Add the owner email in the listing before signing.', 422);
+        }
+
         $forceRecreate = $request->boolean('force_recreate', false);
-        if (!$forceRecreate) {
+        if (! $forceRecreate) {
             $existing = ListingEunoAgreement::where('listing_id', $listing->id)
+                ->whereNull('listing_offer_id')
                 ->where('status', 'inprogress')
                 ->latest()
                 ->first();
 
-            if ($existing && !empty($existing->signing_url)) {
-                return api_success([
-                    'agreement_id' => $existing->id,
-                    'euno_agreement_id' => $existing->agreement_id,
-                    'signing_url' => $existing->signing_url,
-                    'status' => $existing->status,
-                    'signers' => $existing->signers,
-                ], 'Existing in-progress Eunodoc signature agreement retrieved.');
+            if ($existing && ! empty($existing->signing_url)) {
+                return api_success($this->agreementPayload($existing), 'Existing in-progress EunoDoc signature agreement retrieved.');
             }
         }
 
-        // Automatically provision and generate genuine statutory document PDFs
-        $discService = app(\App\Services\DisclosureService::class);
-        $discService->regenerateStatutoryDocuments($listing);
         $docController = app(ListingDocumentController::class);
-        $answers = $discService->getAnswers($listing);
+        $documents = $docController->signableDocuments($listing)
+            ->filter(fn (ListingDocument $doc) => $doc->status !== 'signed')
+            ->values();
 
-        $documents = ListingDocument::where('listing_id', $listing->id)->get();
-        $filePaths = [];
+        if ($documents->isEmpty()) {
+            return api_error('All documents are already signed.', 422);
+        }
 
+        // Unsigned PDFs carrying the $sN signature tags. Kept apart from the document's own
+        // files so a later view/download never serves this copy by mistake.
+        $sourcePaths = [];
         foreach ($documents as $doc) {
-            $pdfRelPath = "listings/{$listing->id}/statutory/{$doc->type}.pdf";
-            $fullPath = Storage::disk('local')->path($pdfRelPath);
-
-            // If statutory, render full PDF for EunoDoc
-            if (str_contains($doc->path, 'statutory') || in_array($doc->type, ['lead_disclosure', 'listing_agreement', 'agency_disclosure', 'sellers_disclosure', 'condo_disclosure'])) {
-                $refMethod = new \ReflectionMethod($docController, 'renderStatutoryHtml');
-                $refMethod->setAccessible(true);
-                $html = $refMethod->invoke($docController, $listing, $doc, $answers);
-
-                if (class_exists(\Barryvdh\DomPDF\Facade\Pdf::class)) {
-                    $pdfContent = \Barryvdh\DomPDF\Facade\Pdf::loadHTML($html)->output();
-                    Storage::disk('local')->put($pdfRelPath, $pdfContent);
-                    $filePaths[] = $fullPath;
-                    continue;
-                }
-            }
-
-            $storagePath = Storage::disk('local')->path($doc->path);
-            if (file_exists($storagePath)) {
-                $filePaths[] = $storagePath;
-            }
+            $relPath = "listings/{$listing->id}/euno-source/{$doc->type}.pdf";
+            Storage::disk('local')->put($relPath, $docController->renderPdf($listing, $doc));
+            $sourcePaths[$doc->id] = $relPath;
         }
 
-        // If no documents exist yet, create a placeholder disclosure so the flow proceeds
-        if (empty($filePaths)) {
-            $dir = storage_app_path("listings/{$listing->id}/disclosures");
-            if (!file_exists($dir)) {
-                @mkdir($dir, 0755, true);
-            }
-            $sampleDocPath = $dir . '/Listing_Disclosures_Packet.pdf';
-            if (!file_exists($sampleDocPath)) {
-                file_put_contents($sampleDocPath, $this->buildSampleDisclosurePdf($listing));
-            }
-            $filePaths[] = $sampleDocPath;
+        $filePaths = array_map(fn ($p) => Storage::disk('local')->path($p), array_values($sourcePaths));
+        $eunoSigners = array_map(fn ($s) => $s + ['type' => 'signer'], $signers);
+
+        $response = $this->eunoService->getAgreementKey($filePaths, 'Reozom Documents', $eunoSigners);
+        if (! $response || empty($response['_id'])) {
+            return api_error('Could not start e-signing with EunoDoc. Please try again later.', 502);
         }
 
-        // Prepare signers
-        $signers = [
-            [
-                'email' => $listing->user->email,
-                'name' => $listing->user->name,
-                'type' => 'signer',
-            ],
-        ];
+        $recipients = $response['recipients'] ?? [];
 
-        // Call Euno API to register the agreement
-        $docName = "Disclosures - {$listing->reference_code}";
-        $agreementResponse = $this->eunoService->getAgreementKey($filePaths, $docName, $signers);
+        // Send the current user to their own signing link; otherwise the titled owner's.
+        $signerEmails = array_column($signers, 'email');
+        $linkEmail = in_array(strtolower($user->email), $signerEmails, true) ? $user->email : $signers[0]['email'];
+        $signingUrl = $this->eunoService->getSigningUrlForUser($response['_id'], $linkEmail, $recipients);
 
-        if (!$agreementResponse || empty($agreementResponse['_id'])) {
-            return api_error('Failed to initiate e-signature agreement with Eunodoc.', 502);
-        }
+        // Close any older open agreement for this listing so only one is active.
+        ListingEunoAgreement::where('listing_id', $listing->id)
+            ->whereNull('listing_offer_id')
+            ->where('status', 'inprogress')
+            ->update(['status' => 'canceled']);
 
-        $agreementId = $agreementResponse['_id'];
-        $signingUrl = $this->eunoService->getSigningUrlForUser($agreementId, $user->email, $agreementResponse['recipients'] ?? []);
-
-        // Store agreement in database
         $agreement = ListingEunoAgreement::create([
             'listing_id' => $listing->id,
             'initiated_by_user_id' => $user->id,
             'document_type' => 'disclosures_bundle',
-            'document_name' => $docName,
-            'agreement_id' => $agreementId,
+            'document_name' => 'Reozom Documents',
+            'agreement_id' => $response['_id'],
             'signing_url' => $signingUrl,
             'status' => 'inprogress',
-            'signers' => $agreementResponse['recipients'] ?? $signers,
-            'source_file_paths' => $filePaths,
+            'signers' => $this->mergeRecipientIds($signers, $recipients),
+            // Keyed by listing_documents.id so completion marks exactly these documents signed.
+            'source_file_paths' => $sourcePaths,
             'sent_at' => now(),
         ]);
 
-        return api_success([
-            'agreement_id' => $agreement->id,
-            'euno_agreement_id' => $agreementId,
-            'signing_url' => $signingUrl,
-            'status' => $agreement->status,
-            'signers' => $agreement->signers,
-        ], 'Eunodoc signature agreement created successfully.');
+        return api_success($this->agreementPayload($agreement), 'EunoDoc signature agreement created successfully.');
     }
 
     /**
-     * Check status of a listing's EunoDoc agreement and sync completed PDF.
+     * Status of the listing's latest EunoDoc agreement; stores the signed PDF once completed.
      */
     public function getListingSigningStatus(Request $request, Listing $listing): JsonResponse
     {
+        Gate::authorize('view', $listing);
+
         $agreement = ListingEunoAgreement::where('listing_id', $listing->id)
+            ->whereNull('listing_offer_id')
             ->latest()
             ->first();
 
-        if (!$agreement) {
+        if (! $agreement) {
             return api_success([
                 'has_agreement' => false,
                 'status' => 'not_initiated',
+                'signers' => $listing->eSignSigners(),
             ]);
         }
 
-        // Check remote status if still in progress
-        if ($agreement->status !== 'completed' && $agreement->agreement_id) {
+        if (! in_array($agreement->status, ['completed', 'canceled'], true) && $agreement->agreement_id) {
             $remoteStatus = $this->eunoService->getAgreementStatus($agreement->agreement_id);
             if ($remoteStatus === 'completed') {
-                $agreement->status = 'completed';
-                $agreement->completed_at = now();
-
-                // Download signed document
-                $signedPdf = $this->eunoService->getSignedDocument($agreement->agreement_id);
-                if ($signedPdf) {
-                    $signedPath = "listings/{$listing->id}/signed/EunoSigned_Disclosures_{$agreement->id}.pdf";
-                    Storage::disk('local')->put($signedPath, $signedPdf);
-                    $agreement->signed_file_path = $signedPath;
-                }
-
-                // Download audit report
-                $auditPdf = $this->eunoService->getAuditReport($agreement->agreement_id);
-                if ($auditPdf) {
-                    $auditPath = "listings/{$listing->id}/signed/EunoAuditReport_{$agreement->id}.pdf";
-                    Storage::disk('local')->put($auditPath, $auditPdf);
-                    $agreement->audit_file_path = $auditPath;
-                }
-
-                $agreement->save();
-
-                // Mark listing documents as verified/signed
-                ListingDocument::where('listing_id', $listing->id)->update([
-                    'status' => 'signed',
-                    'signed_at' => now(),
-                    'admin_notes' => 'Electronically signed and verified via Eunodoc.',
-                ]);
-            } else {
-                $agreement->status = $remoteStatus;
-                $agreement->save();
+                $this->completeListingAgreement($agreement);
+            } elseif ($remoteStatus !== 'unknown') {
+                $agreement->update(['status' => $remoteStatus]);
             }
         }
 
         return api_success([
             'has_agreement' => true,
-            'agreement_id' => $agreement->id,
-            'euno_agreement_id' => $agreement->agreement_id,
-            'status' => $agreement->status,
-            'signing_url' => $agreement->signing_url,
             'is_completed' => $agreement->status === 'completed',
             'signed_at' => $agreement->completed_at,
             'has_signed_pdf' => (bool) $agreement->signed_file_path,
             'has_audit_pdf' => (bool) $agreement->audit_file_path,
+        ] + $this->agreementPayload($agreement));
+    }
+
+    /**
+     * Store EunoDoc's signed packet and audit report, and mark only the documents that were
+     * part of this agreement as signed.
+     */
+    protected function completeListingAgreement(ListingEunoAgreement $agreement): void
+    {
+        if ($agreement->status === 'completed' && $agreement->signed_file_path) {
+            return;
+        }
+
+        $signedPdf = $this->eunoService->getSignedDocument($agreement->agreement_id);
+        if (! $signedPdf) {
+            // Don't mark anything signed until the signed copy is actually stored.
+            return;
+        }
+
+        $signedPath = "listings/{$agreement->listing_id}/signed/EunoSigned_Documents_{$agreement->id}.pdf";
+        Storage::disk('local')->put($signedPath, $signedPdf);
+
+        $auditPdf = $this->eunoService->getAuditReport($agreement->agreement_id);
+        $auditPath = null;
+        if ($auditPdf) {
+            $auditPath = "listings/{$agreement->listing_id}/signed/EunoAuditReport_{$agreement->id}.pdf";
+            Storage::disk('local')->put($auditPath, $auditPdf);
+        }
+
+        $agreement->update([
+            'status' => 'completed',
+            'completed_at' => now(),
+            'signed_file_path' => $signedPath,
+            'audit_file_path' => $auditPath,
         ]);
+
+        $signers = $agreement->signers ?? [];
+        $documentIds = array_keys($agreement->source_file_paths ?? []);
+
+        ListingDocument::where('listing_id', $agreement->listing_id)
+            ->whereIn('id', $documentIds)
+            ->get()
+            ->each(fn (ListingDocument $doc) => $doc->update([
+                'status' => 'signed',
+                'signed_at' => now(),
+                'signed_by' => implode(', ', array_column($signers, 'name')),
+                'signature_type' => 'eunodoc',
+                'signature_image' => null,
+                'initials_image' => null,
+                'verification_code' => $agreement->agreement_id,
+                'audit_trail' => [
+                    'provider' => 'eunodoc',
+                    'listing_euno_agreement_id' => $agreement->id,
+                    'euno_agreement_id' => $agreement->agreement_id,
+                    'signers' => $signers,
+                    'completed_at' => now()->toIso8601String(),
+                ],
+                'admin_notes' => 'Electronically signed via EunoDoc.',
+            ]));
+    }
+
+    /**
+     * @param  array<int, array{name: string, email: string}>  $signers
+     */
+    protected function mergeRecipientIds(array $signers, array $recipients): array
+    {
+        return array_map(function (array $signer) use ($recipients) {
+            foreach ($recipients as $recipient) {
+                if (strcasecmp($recipient['email'] ?? '', $signer['email']) === 0) {
+                    $signer['recipient_id'] = $recipient['_id'] ?? null;
+                    break;
+                }
+            }
+
+            return $signer;
+        }, $signers);
+    }
+
+    protected function agreementPayload(ListingEunoAgreement $agreement): array
+    {
+        return [
+            'agreement_id' => $agreement->id,
+            'euno_agreement_id' => $agreement->agreement_id,
+            'signing_url' => $agreement->signing_url,
+            'status' => $agreement->status,
+            'signers' => array_map(
+                fn ($s) => ['name' => $s['name'] ?? '', 'email' => $s['email'] ?? ''],
+                $agreement->signers ?? []
+            ),
+        ];
     }
 
     /**
@@ -357,7 +385,9 @@ class EunoSignController extends Controller
         }
 
         $remoteStatus = $this->eunoService->getAgreementStatus($agreementId);
-        if ($remoteStatus === 'completed') {
+        if ($remoteStatus === 'completed' && $agreement->listing_offer_id === null) {
+            $this->completeListingAgreement($agreement);
+        } elseif ($remoteStatus === 'completed') {
             $agreement->status = 'completed';
             $agreement->completed_at = now();
 
@@ -421,26 +451,6 @@ class EunoSignController extends Controller
             'Content-Type' => 'application/pdf',
             'Content-Disposition' => 'inline; filename="EunoAuditReport_' . $agreement->id . '.pdf"',
         ]);
-    }
-
-    /**
-     * Fallback minimal PDF string or rendered PDF for testing/development.
-     */
-    protected function buildSampleDisclosurePdf(Listing $listing): string
-    {
-        if (class_exists(\Barryvdh\DomPDF\Facade\Pdf::class)) {
-            $answers = app(\App\Services\DisclosureService::class)->getAnswers($listing);
-            $doc = $listing->documents()->first();
-            if ($doc) {
-                $controller = app(ListingDocumentController::class);
-                $refMethod = new \ReflectionMethod($controller, 'renderStatutoryHtml');
-                $refMethod->setAccessible(true);
-                $html = $refMethod->invoke($controller, $listing, $doc, $answers);
-                return \Barryvdh\DomPDF\Facade\Pdf::loadHTML($html)->output();
-            }
-        }
-
-        return "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R/Resources<<>>>>endobj\nxref\n0 4\n0000000000 65535 f\n0000000010 00000 n\n0000000053 00000 n\n0000000102 00000 n\ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n178\n%%EOF";
     }
 
     protected function buildSampleOfferPdf(ListingOffer $offer): string

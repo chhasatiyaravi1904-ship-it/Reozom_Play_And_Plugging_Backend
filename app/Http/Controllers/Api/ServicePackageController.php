@@ -47,9 +47,9 @@ class ServicePackageController extends Controller
         $package = DB::transaction(function () use ($request, $validated, $processId) {
             $process = $processId ? $this->resolveProcessForPackage($request->user(), (int) $processId, $validated['name']) : null;
 
-            $package = ServicePackage::create(\Illuminate\Support\Arr::except($validated, ['assigned_zips']));
-
-            $process?->update(['service_package_id' => $package->id]);
+            $package = ServicePackage::create(
+                \Illuminate\Support\Arr::except($validated, ['assigned_zips']) + ['listing_process_id' => $process?->id]
+            );
 
             if (!empty($validated['assigned_zips'])) {
                 $zipIds = \App\Models\ZipCode::whereIn('code', $validated['assigned_zips'])->pluck('id');
@@ -63,8 +63,8 @@ class ServicePackageController extends Controller
     }
 
     /**
-     * Agents link their own processes. A shared system default can only belong to one package,
-     * so picking one gives the agent their own copy (with all steps and disclosure questions).
+     * Agents link their own processes. A system default is a shared template, so picking one
+     * gives the agent their own copy (with all steps and disclosure questions).
      */
     private function resolveProcessForPackage(User $user, int $processId, string $packageName): ListingProcess
     {
@@ -127,8 +127,7 @@ class ServicePackageController extends Controller
 
         DB::transaction(function () use ($request, $servicePackage, $validated, $processId, $hasProcessKey) {
             // Re-selecting the process already linked to this package must not create another copy
-            $alreadyLinked = $processId && ListingProcess::where('id', $processId)
-                ->where('service_package_id', $servicePackage->id)->exists();
+            $alreadyLinked = $processId && (int) $servicePackage->listing_process_id === (int) $processId;
 
             $process = ($hasProcessKey && $processId && ! $alreadyLinked)
                 ? $this->resolveProcessForPackage($request->user(), (int) $processId, $validated['name'] ?? $servicePackage->name)
@@ -137,8 +136,7 @@ class ServicePackageController extends Controller
             $servicePackage->update(\Illuminate\Support\Arr::except($validated, ['assigned_zips']));
 
             if ($hasProcessKey && ! $alreadyLinked) {
-                ListingProcess::where('service_package_id', $servicePackage->id)->update(['service_package_id' => null]);
-                $process?->update(['service_package_id' => $servicePackage->id]);
+                $servicePackage->update(['listing_process_id' => $process?->id]);
             }
 
             if (array_key_exists('assigned_zips', $validated)) {

@@ -179,7 +179,7 @@ class MichiganListingProcessSeeder extends Seeder
             $residentialConfig = ListingProcessDefinitions::getResidentialProcessConfig();
             $residentialCodes = ['mi_residential_appliances', 'mi_residential_conditions', 'lead_paint_disclosure'];
 
-            ListingProcess::updateOrCreate(
+            $miResidentialProcess = ListingProcess::updateOrCreate(
                 [
                     'name' => 'Michigan Residential Listing Process',
                 ],
@@ -187,7 +187,6 @@ class MichiganListingProcessSeeder extends Seeder
                     'type' => 'default',
                     'status' => 'active',
                     'agent_id' => null,
-                    'service_package_id' => $michiganPackage->id,
                     'assigned_zips' => $allMiZipStrings,
                     'required_disclosures' => $residentialCodes,
                     'config' => ListingProcessDefinitions::withDisclosureSteps(
@@ -198,6 +197,11 @@ class MichiganListingProcessSeeder extends Seeder
                 ]
             );
 
+            // Sellers of the Michigan package use this process unless the package already has one.
+            if ($michiganPackage->listing_process_id === null) {
+                $michiganPackage->update(['listing_process_id' => $miResidentialProcess->id]);
+            }
+
             // Ensure the generic Residential Property Listing Process has the exact same config
             ListingProcess::updateOrCreate(
                 [
@@ -207,7 +211,6 @@ class MichiganListingProcessSeeder extends Seeder
                 [
                     'type' => 'default',
                     'status' => 'active',
-                    'service_package_id' => null,
                     'assigned_zips' => $allMiZipStrings,
                     'config' => $residentialConfig,
                 ]
@@ -223,7 +226,6 @@ class MichiganListingProcessSeeder extends Seeder
                     'type' => 'default',
                     'status' => 'active',
                     'agent_id' => null,
-                    'service_package_id' => null,
                     'assigned_zips' => $allMiZipStrings,
                     'required_disclosures' => $vacantLandCodes,
                     'config' => ListingProcessDefinitions::withDisclosureSteps(

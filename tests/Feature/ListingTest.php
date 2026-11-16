@@ -61,13 +61,13 @@ class ListingTest extends TestCase
         $servicePackage = ServicePackage::create(['agent_id' => $agent->id, 'name' => 'Test Pkg', 'is_active' => true]);
         $servicePackage->zipCodes()->attach($zip->id);
 
-        \App\Models\ListingProcess::create([
+        $process = \App\Models\ListingProcess::create([
             'name' => 'Default Process',
             'agent_id' => $agent->id,
-            'service_package_id' => $servicePackage->id,
             'status' => 'active',
             'config' => [['id' => 'step1', 'name' => 'Step 1'], ['id' => 'step2', 'name' => 'Step 2']],
         ]);
+        $servicePackage->update(['listing_process_id' => $process->id]);
 
         $response = $this->withHeader('Authorization', 'Bearer '.$this->tokenFor($user))
             ->postJson('/api/listings', [

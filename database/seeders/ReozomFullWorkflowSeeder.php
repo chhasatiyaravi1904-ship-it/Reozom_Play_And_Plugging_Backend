@@ -73,10 +73,12 @@ class ReozomFullWorkflowSeeder extends Seeder
             [
                 'type' => 'custom',
                 'status' => 'active',
-                'service_package_id' => $package->id,
                 'config' => $snapshot,
             ]
         );
+
+        // The agent's package uses the agent's own process (not the shared system default).
+        $package->update(['listing_process_id' => $agentCustomProcess->id]);
 
         // =========================================================================
         // SCENARIO 1: LIVE PUBLISHED LISTING WITH ACTIVE OFFERS & EUNODOC AGREEMENT

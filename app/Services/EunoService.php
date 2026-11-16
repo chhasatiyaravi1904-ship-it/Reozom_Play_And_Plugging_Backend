@@ -26,7 +26,7 @@ class EunoService
     {
         $this->apiUrl = config('euno.api_url', 'https://eunodocback.reozom.com/api/v1');
         $this->webUrl = config('euno.web_url', 'https://eunodoc.reozom.com');
-        $this->authorizationToken = config('euno.auth_token', 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI2NTI2ZjdiNDM2MWZlZGM0OTU4OWU1MzMiLCJpYXQiOjE3MjY2NDU5NTl9.SZ381_ZWGf4t_w30V8L2fsFQmlwkYy-BNSjnztq_iZs');
+        $this->authorizationToken = (string) config('euno.auth_token', '');
         $this->retries = (int) config('euno.retries', 3);
         $this->mockMode = (bool) config('euno.mock_mode', false);
     }
@@ -70,6 +70,12 @@ class EunoService
     ): ?array {
         if ($this->mockMode) {
             return $this->generateMockAgreement($documentName, $signers);
+        }
+
+        if ($this->authorizationToken === '') {
+            Log::error('EunoService: EUNO_AUTH_TOKEN is not set; cannot create an EunoDoc agreement.');
+
+            return null;
         }
 
         try {
@@ -174,8 +180,8 @@ class EunoService
                 return $this->getAgreementKey($filePaths, $documentName, $signers, $redirectUrl, ++$triedBefore, $filePathsSigned);
             }
 
-            // Fallback to simulated agreement for development resilient workflow
-            return $this->generateMockAgreement($documentName, $signers);
+            // Never fall back to a fake agreement: the seller would believe they are signing when nothing was sent.
+            return null;
         }
     }
 

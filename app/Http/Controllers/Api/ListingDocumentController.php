@@ -374,125 +374,6 @@ class ListingDocumentController extends Controller
     }
 
     /**
-     * E-Sign a statutory listing document with Reozom digital signature verification.
-     */
-    public function sign(Request $request, Listing $listing, $documentId): JsonResponse
-    {
-        Gate::authorize('update', $listing);
-
-        $document = $this->findOrProvisionDocument($listing, $documentId);
-
-        $signerName = $request->input('signer_name') ?: $request->user()->name;
-        $signatureImage = $request->input('signature_image');
-        $signatureType = $request->input('signature_type') ?: ($signatureImage ? 'drawn' : 'typed');
-        $initialsImage = $request->input('initials_image');
-        $verificationCode = 'REO-SIGN-' . strtoupper(substr(bin2hex(random_bytes(4)), 0, 8));
-        $ip = $request->ip() ?: '127.0.0.1';
-
-        $auditTrail = [
-            'signed_at' => now()->toIso8601String(),
-            'signer_name' => $signerName,
-            'signer_email' => $request->user()->email,
-            'ip_address' => $ip,
-            'user_agent' => $request->userAgent() ?: 'Reozom Signature Studio',
-            'verification_code' => $verificationCode,
-            'signature_type' => $signatureType,
-            'compliance' => 'UETA & ESIGN Act Certified Electronic Signature',
-        ];
-
-        $document->update([
-            'status' => 'signed',
-            'signed_at' => now(),
-            'signed_by' => $signerName,
-            'signature_image' => $signatureImage,
-            'signature_type' => $signatureType,
-            'initials_image' => $initialsImage,
-            'signer_ip' => $ip,
-            'verification_code' => $verificationCode,
-            'audit_trail' => $auditTrail,
-        ]);
-
-        return api_success([
-            'id' => $document->id,
-            'type' => $document->type,
-            'status' => 'signed',
-            'signedAt' => $document->signed_at->toIso8601String(),
-            'signedBy' => $document->signed_by,
-            'signatureImage' => $document->signature_image,
-            'signatureType' => $document->signature_type,
-            'verificationCode' => $document->verification_code,
-        ], 'Document successfully signed.');
-    }
-
-    /**
-     * E-Sign all statutory listing disclosures & agreements packet at once (Reozom Packet Sign).
-     */
-    public function signAll(Request $request, Listing $listing): JsonResponse
-    {
-        Gate::authorize('update', $listing);
-
-        $discService = app(DisclosureService::class);
-        $discService->provisionDocuments($listing);
-
-        $requirements = $this->resolveRequirements($listing);
-        $statutoryTypes = array_column(
-            array_filter($requirements, fn ($r) => ($r['category'] ?? '') === 'statutory' || !empty($r['signable'])),
-            'id'
-        );
-
-        $signerName = $request->input('signer_name') ?: $request->user()->name;
-        $signatureImage = $request->input('signature_image');
-        $signatureType = $request->input('signature_type') ?: ($signatureImage ? 'drawn' : 'typed');
-        $initialsImage = $request->input('initials_image');
-        $ip = $request->ip() ?: '127.0.0.1';
-
-        $signedDocs = [];
-
-        foreach ($statutoryTypes as $type) {
-            $document = $this->findOrProvisionDocument($listing, $type);
-            $verificationCode = 'REO-SIGN-' . strtoupper(substr(bin2hex(random_bytes(4)), 0, 8));
-
-            $auditTrail = [
-                'signed_at' => now()->toIso8601String(),
-                'signer_name' => $signerName,
-                'signer_email' => $request->user()->email,
-                'ip_address' => $ip,
-                'user_agent' => $request->userAgent() ?: 'Reozom Signature Studio',
-                'verification_code' => $verificationCode,
-                'signature_type' => $signatureType,
-                'compliance' => 'UETA & ESIGN Act Certified Electronic Signature',
-                'packet_execution' => true,
-            ];
-
-            $document->update([
-                'status' => 'signed',
-                'signed_at' => now(),
-                'signed_by' => $signerName,
-                'signature_image' => $signatureImage,
-                'signature_type' => $signatureType,
-                'initials_image' => $initialsImage,
-                'signer_ip' => $ip,
-                'verification_code' => $verificationCode,
-                'audit_trail' => $auditTrail,
-            ]);
-
-            $signedDocs[] = [
-                'id' => $document->id,
-                'type' => $document->type,
-                'status' => 'signed',
-                'signedAt' => $document->signed_at->toIso8601String(),
-                'signedBy' => $document->signed_by,
-                'verificationCode' => $verificationCode,
-            ];
-        }
-
-        return api_success([
-            'signedCount' => count($signedDocs),
-            'documents' => $signedDocs,
-        ], 'All statutory listing documents successfully signed.');
-    }
-
-    /**
      * Render and preview statutory listing disclosure or agreement.
      */
     public function preview(Request $request, Listing $listing, $documentId)
@@ -551,6 +432,19 @@ class ListingDocumentController extends Controller
         }
 
         $disposition = $isInline ? 'inline' : 'attachment';
+
+        // Signed through EunoDoc: serve the signed packet EunoDoc returned, never a re-render.
+        $signedPath = $this->eunoSignedPath($document);
+        if ($signedPath !== null) {
+            $fileContent = Storage::disk('local')->get($signedPath);
+
+            return response($fileContent, 200, [
+                'Content-Type' => 'application/pdf',
+                'Content-Disposition' => "{$disposition}; filename=\"Signed - {$filename}\"",
+                'Content-Length' => strlen($fileContent),
+                'Cache-Control' => 'no-cache, no-store, must-revalidate',
+            ]);
+        }
 
         // Check for existing compiled PDF or file on private disk
         $candidates = array_filter([
@@ -832,61 +726,11 @@ class ListingDocumentController extends Controller
         $refCode = htmlspecialchars($listing->reference_code);
         $date = now()->format('F j, Y');
 
-        $isSigned = $document->status === 'signed';
-        $signedBy = htmlspecialchars($document->signed_by ?? $seller);
-        $signedAt = $document->signed_at ? $document->signed_at->format('M d, Y h:i A') : 'Pending Signature';
-        $verificationCode = htmlspecialchars($document->verification_code ?? ('REO-VERIF-' . substr(md5($document->id), 0, 8)));
-        $signerIp = htmlspecialchars($document->signer_ip ?? '127.0.0.1');
-        $signatureImage = $document->signature_image;
+        $signatureBlock = $this->signatureLinesHtml($listing->eSignSigners());
 
-        if ($isSigned) {
-            $signatureVisual = '';
-            if (!empty($signatureImage) && str_starts_with($signatureImage, 'data:image/')) {
-                $signatureVisual = "<img src=\"{$signatureImage}\" alt=\"Signature\" style=\"max-height:50px;max-width:240px;object-fit:contain;display:block;margin-bottom:4px;\" />";
-            } else {
-                $signatureVisual = "<div style=\"font-family:'Brush Script MT', 'Great Vibes', 'Caveat', cursive;font-size:26px;color:#003366;line-height:1.2;margin-bottom:4px;\">{$signedBy}</div>";
-            }
-
-            $signatureBlock = <<<HTML
-            <div style="border:2px solid #059669;background:#f0fdf4;border-radius:8px;padding:12px 16px;margin-top:12px;">
-                <table style="width:100%;border-collapse:collapse;">
-                    <tr>
-                        <td style="width:58%;vertical-align:bottom;border-bottom:1.5px solid #64748b;padding-bottom:6px;">
-                            {$signatureVisual}
-                            <div style="font-size:11px;color:#334155;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;">
-                                Authorized Signer: {$signedBy}
-                            </div>
-                        </td>
-                        <td style="width:42%;vertical-align:top;text-align:right;padding-left:12px;">
-                            <div style="display:inline-block;background:#059669;color:#ffffff;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:bold;letter-spacing:0.5px;">
-                                &#10003; REOZOM VERIFIED E-SIGN
-                            </div>
-                            <div style="font-size:11px;color:#1e293b;font-weight:600;margin-top:4px;">
-                                Executed: {$signedAt}
-                            </div>
-                            <div style="font-size:10px;color:#475569;font-family:monospace;margin-top:2px;">
-                                Certificate: {$verificationCode}
-                            </div>
-                            <div style="font-size:9px;color:#64748b;margin-top:2px;">
-                                IP: {$signerIp} | Security: SHA-256
-                            </div>
-                        </td>
-                    </tr>
-                </table>
-                <div style="margin-top:8px;font-size:10px;color:#047857;border-top:1px dashed #a7f3d0;padding-top:6px;">
-                    &#128274; Electronic Record & Signature Certified under U.S. Electronic Signatures in Global & National Commerce Act (ESIGN, 15 U.S.C. § 7001) & Uniform Electronic Transactions Act (UETA).
-                </div>
-            </div>
-HTML;
-        } else {
-            $signatureBlock = <<<HTML
-            <div style="border:1.5px dashed #f59e0b;background:#fffbeb;border-radius:8px;padding:12px 16px;margin-top:12px;color:#b45309;">
-                <div style="font-weight:bold;font-size:12px;">&#9888; PENDING OFFICIAL SIGNATURE</div>
-                <div style="font-size:11px;color:#78350f;margin-top:3px;">
-                    This statutory disclosure must be electronically signed by {$seller} prior to MLS syndication.
-                </div>
-            </div>
-HTML;
+        if ($document->status === 'signed' && $document->signed_at) {
+            $signedOn = $document->signed_at->format('M d, Y');
+            $signatureBlock .= "<p style=\"font-size:11px;color:#334155;margin-top:8px;\">Signed electronically via EunoDoc on {$signedOn}. The signed copy is available from the Documents page.</p>";
         }
 
         $docTitle = htmlspecialchars(str_replace('.pdf', '', $document->original_name));
@@ -1115,7 +959,7 @@ HTML;
         .checklist { width: 100%; border-collapse: collapse; margin-top: 10px; margin-bottom: 16px; }
         .checklist th, .checklist td { border: 1px solid #cbd5e1; padding: 8px 10px; font-size: 11px; text-align: left; vertical-align: top; }
         .checklist th { background: #f1f5f9; font-weight: 600; color: #334155; }
-        .sign-box { margin-top: 28px; padding: 18px; border: 2px dashed #94a3b8; border-radius: 8px; background: #f8fafc; }
+        .sign-box { margin-top: 28px; padding: 18px 0 0 0; background: #ffffff; page-break-inside: avoid; }
         .legal-notice { font-size: 10px; color: #64748b; margin-top: 20px; line-height: 1.4; border-top: 1px solid #e2e8f0; padding-top: 10px; }
         @media print {
             body { background: #fff; padding: 0; }
@@ -1157,11 +1001,10 @@ HTML;
         {$bodyContent}
 
         <div class="sign-box">
-            <h3 style="margin:0 0 10px 0;font-size:13px;color:#1e293b;">Electronic Signature & Execution Verification</h3>
-            {$signatureBlock}
-            <div style="margin-top:10px;font-size:11px;color:#64748b;">
-                By signing, the seller certifies that the information provided in this disclosure is true and correct to the best of their knowledge.
+            <div style="font-size:11px;color:#64748b;margin-bottom:6px;">
+                By signing, the seller certifies that the information provided in this document is true and correct to the best of their knowledge.
             </div>
+            {$signatureBlock}
         </div>
 
         <div class="legal-notice">
@@ -1171,6 +1014,80 @@ HTML;
 </body>
 </html>
 HTML;
+    }
+
+    /**
+     * Reozom's EunoDoc signature lines: one line per signer, two per row, each carrying a
+     * white "$sN" tag. EunoService finds those tags in the PDF and places signer N's field there.
+     *
+     * @param  array<int, array{name: string, email: string}>  $signers
+     */
+    private function signatureLinesHtml(array $signers): string
+    {
+        $cell = function (int $number, array $signer): string {
+            $tag = '$s'.$number;
+            $pad = str_repeat('&nbsp;', 12);
+            $label = htmlspecialchars($signer['name']).' ('.htmlspecialchars($signer['email']).')';
+
+            return '<td style="width:44%;font-size:11px;color:#334155;vertical-align:bottom;">'
+                .'<p style="margin:0;text-align:center;border-bottom:0.5px solid #000;color:#ffffff;font-size:25px;line-height:30px;">'
+                ."{$pad}{$tag}{$pad}</p>"
+                ."Seller: {$label}<br>Date: ____________________"
+                .'</td>';
+        };
+
+        $rows = '';
+        foreach (array_chunk($signers, 2) as $rowIndex => $pair) {
+            $cells = [];
+            foreach ($pair as $i => $signer) {
+                $cells[] = $cell($rowIndex * 2 + $i + 1, $signer);
+            }
+            $rows .= '<tr>'.implode('<td style="width:12%;"></td>', $cells).'</tr>'
+                .'<tr><td colspan="3" style="height:18px;"></td></tr>';
+        }
+
+        return '<table style="width:100%;border-collapse:collapse;margin-top:12px;">'.$rows.'</table>';
+    }
+
+    /**
+     * Stored EunoDoc signed packet for a document signed through EunoDoc, if it exists.
+     */
+    private function eunoSignedPath(ListingDocument $document): ?string
+    {
+        if ($document->status !== 'signed' || ($document->signature_type ?? null) !== 'eunodoc') {
+            return null;
+        }
+
+        $agreementId = $document->audit_trail['listing_euno_agreement_id'] ?? null;
+        $path = $agreementId ? \App\Models\ListingEunoAgreement::find($agreementId)?->signed_file_path : null;
+
+        return $path && Storage::disk('local')->exists($path) ? $path : null;
+    }
+
+    /**
+     * Unsigned PDF of a generated document, as sent to EunoDoc for signing.
+     */
+    public function renderPdf(Listing $listing, ListingDocument $document): string
+    {
+        $answers = app(DisclosureService::class)->getAnswers($listing);
+        $html = $this->renderStatutoryHtml($listing, $document, $answers);
+
+        return Pdf::loadHTML($html)->setPaper('letter', 'portrait')->setWarnings(false)->output();
+    }
+
+    /**
+     * Generated documents of this listing that must be e-signed.
+     *
+     * @return \Illuminate\Support\Collection<int, ListingDocument>
+     */
+    public function signableDocuments(Listing $listing): \Illuminate\Support\Collection
+    {
+        $types = array_column(
+            array_filter($this->resolveRequirements($listing), fn ($r) => ! empty($r['signable'])),
+            'id'
+        );
+
+        return collect($types)->map(fn (string $type) => $this->findOrProvisionDocument($listing, $type));
     }
 
     private function formatAns(array $answers, string $key, string $default): string

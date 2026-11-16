@@ -133,8 +133,6 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('{listing}/documents/{document}/download', 'download')->name('listings.documents.download');
         Route::get('{listing}/documents/{document}/view', 'view')->name('listings.documents.view');
         Route::get('{listing}/documents/{document}/preview', 'preview')->name('listings.documents.preview');
-        Route::post('{listing}/documents/sign-all', 'signAll')->name('listings.documents.sign-all');
-        Route::post('{listing}/documents/{document}/sign', 'sign')->name('listings.documents.sign');
         Route::put('{listing}/documents/{document}/review', 'review')->name('listings.documents.review');
         Route::post('{listing}/documents/{document}/regenerate', 'regenerate')->name('listings.documents.regenerate');
         Route::get('{listing}/documents-download-all', 'downloadAll')->name('listings.documents.download-all');

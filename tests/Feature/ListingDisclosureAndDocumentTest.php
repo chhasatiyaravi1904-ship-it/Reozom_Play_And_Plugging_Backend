@@ -113,7 +113,7 @@ class ListingDisclosureAndDocumentTest extends TestCase
         ]);
     }
 
-    public function test_seller_can_e_sign_statutory_document(): void
+    public function test_local_sign_endpoint_is_gone_documents_are_signed_only_through_eunodoc(): void
     {
         $document = ListingDocument::create([
             'listing_id' => $this->listing->id,
@@ -131,14 +131,8 @@ class ListingDisclosureAndDocumentTest extends TestCase
                 'signer_name' => 'Jane Seller',
             ]);
 
-        $response->assertOk();
-        $response->assertJsonPath('data.status', 'signed');
-        $response->assertJsonPath('data.signedBy', 'Jane Seller');
-
-        $document->refresh();
-        $this->assertEquals('signed', $document->status);
-        $this->assertEquals('Jane Seller', $document->signed_by);
-        $this->assertNotNull($document->signed_at);
+        $this->assertContains($response->status(), [404, 405]);
+        $this->assertEquals('unsigned', $document->fresh()->status);
     }
 
     public function test_seller_can_preview_statutory_document_html(): void

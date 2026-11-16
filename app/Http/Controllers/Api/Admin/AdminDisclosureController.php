@@ -23,6 +23,24 @@ class AdminDisclosureController extends Controller
     }
 
     /**
+     * "All states" is stored as null; any other scope must be a state from the states table.
+     */
+    protected function normalizeStateCode(Request $request): void
+    {
+        if (! $request->has('state_code')) {
+            return;
+        }
+
+        $state = strtoupper(trim((string) $request->input('state_code')));
+        $request->merge(['state_code' => ($state === '' || $state === 'ALL') ? null : $state]);
+    }
+
+    protected function nextOrder(): int
+    {
+        return ((int) PropertyDisclosure::max('order')) + 1;
+    }
+
+    /**
      * Display a listing of dynamic disclosures with filtering.
      */
     public function index(Request $request): JsonResponse
@@ -74,11 +92,12 @@ class AdminDisclosureController extends Controller
     public function store(Request $request): JsonResponse
     {
         $this->authorizeAdmin($request);
+        $this->normalizeStateCode($request);
 
         $validated = $request->validate([
             'title' => ['required', 'string', 'max:255'],
             'code' => ['nullable', 'string', 'max:100', 'unique:property_disclosures,code'],
-            'state_code' => ['nullable', 'string', 'max:10'],
+            'state_code' => ['nullable', 'string', 'max:10', 'exists:states,code'],
             'property_type' => ['nullable', 'string', 'max:50'],
             'category' => ['nullable', 'string', 'max:50'],
             'description' => ['nullable', 'string', 'max:1000'],
@@ -96,12 +115,13 @@ class AdminDisclosureController extends Controller
         $disclosure = PropertyDisclosure::create([
             'title' => $validated['title'],
             'code' => $code,
-            'state_code' => !empty($validated['state_code']) ? strtoupper($validated['state_code']) : null,
+            'state_code' => $validated['state_code'] ?? null,
             'property_type' => !empty($validated['property_type']) ? strtolower($validated['property_type']) : null,
-            'category' => $validated['category'] ?? 'statutory',
+            // Not set from the admin form: a disclosure is only required when a Listing Process marks it required.
+            'category' => $validated['category'] ?? 'custom',
             'description' => $validated['description'] ?? null,
-            'order' => $validated['order'] ?? 1,
-            'is_required' => $validated['is_required'] ?? true,
+            'order' => $validated['order'] ?? $this->nextOrder(),
+            'is_required' => $validated['is_required'] ?? false,
             'is_active' => $validated['is_active'] ?? true,
             'schema' => $this->sanitizeSchema($validated['schema']),
         ]);
@@ -125,11 +145,12 @@ class AdminDisclosureController extends Controller
     public function update(Request $request, PropertyDisclosure $disclosure): JsonResponse
     {
         $this->authorizeAdmin($request);
+        $this->normalizeStateCode($request);
 
         $validated = $request->validate([
             'title' => ['sometimes', 'required', 'string', 'max:255'],
             'code' => ['sometimes', 'required', 'string', 'max:100', Rule::unique('property_disclosures', 'code')->ignore($disclosure->id)],
-            'state_code' => ['nullable', 'string', 'max:10'],
+            'state_code' => ['nullable', 'string', 'max:10', 'exists:states,code'],
             'property_type' => ['nullable', 'string', 'max:50'],
             'category' => ['nullable', 'string', 'max:50'],
             'description' => ['nullable', 'string', 'max:1000'],
@@ -142,9 +163,6 @@ class AdminDisclosureController extends Controller
 
         if (!empty($validated['code'])) {
             $validated['code'] = Str::slug($validated['code'], '_');
-        }
-        if (!empty($validated['state_code'])) {
-            $validated['state_code'] = strtoupper($validated['state_code']);
         }
         if (!empty($validated['property_type'])) {
             $validated['property_type'] = strtolower($validated['property_type']);
@@ -203,7 +221,7 @@ class AdminDisclosureController extends Controller
             'property_type' => $disclosure->property_type,
             'category' => $disclosure->category,
             'description' => $disclosure->description,
-            'order' => $disclosure->order + 1,
+            'order' => $this->nextOrder(),
             'is_required' => $disclosure->is_required,
             'is_active' => false, // Start copies as draft
             'schema' => $disclosure->schema,

@@ -52,7 +52,6 @@ class ListingProcessDisclosureLinkTest extends TestCase
         $this->process = ListingProcess::create([
             'name' => 'Custom Michigan Residential Process',
             'agent_id' => $this->agent->id,
-            'service_package_id' => $this->package->id,
             'type' => 'custom',
             'status' => 'active',
             'assigned_zips' => ['48126'],
@@ -63,6 +62,7 @@ class ListingProcessDisclosureLinkTest extends TestCase
             ],
             'config' => ListingProcessDefinitions::getResidentialProcessConfig(),
         ]);
+        $this->package->update(['listing_process_id' => $this->process->id]);
     }
 
     public function test_listing_creation_links_process_required_disclosures(): void

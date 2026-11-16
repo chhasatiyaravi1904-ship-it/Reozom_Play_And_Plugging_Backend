@@ -20,7 +20,11 @@ class SaveListingProcessRequest extends FormRequest
             'type' => 'nullable|string|in:default,custom',
             'status' => 'nullable|string|in:active,draft',
             'agent_id' => 'nullable|exists:users,id',
-            'service_package_id' => 'nullable|exists:service_packages,id',
+            // Packages whose sellers use this process (each package has one process)
+            'service_package_ids' => 'nullable|array',
+            'service_package_ids.*' => 'integer|distinct|exists:service_packages,id',
+            // Create only: System Default process whose steps the new process starts from
+            'base_process_id' => 'nullable|integer|exists:listing_processes,id',
             'assigned_zips' => 'nullable|array',
             'required_disclosures' => 'nullable|array',
             'required_disclosures.*' => 'string',
