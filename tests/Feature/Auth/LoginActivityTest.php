@@ -53,7 +53,7 @@ class LoginActivityTest extends TestCase
 
     public function test_seller_login_does_not_record_an_admin_activity_log_entry(): void
     {
-        $seller = User::factory()->create(['role' => UserRole::Seller, 'email' => 'seller@example.com']);
+        $seller = User::factory()->create(['role' => UserRole::SellerBuyer, 'email' => 'seller@example.com']);
 
         $this->postJson('/api/auth/login', [
             'email' => $seller->email,

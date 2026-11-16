@@ -18,39 +18,21 @@ class ListingResource extends JsonResource
             ? ($this->images->firstWhere('is_primary', true) ?? $this->images->first())
             : ($this->images()->where('is_primary', true)->first() ?? $this->images()->orderBy('sort_order')->first());
 
-        $price = null;
-        $bedrooms = null;
-        $bathrooms = null;
-        $squareFeet = null;
-        $propertyType = null;
-        $title = null;
-
-        $publicAnswer = $this->relationLoaded('answers')
-            ? $this->answers->firstWhere('step_id', 'system_public_info')
-            : $this->answers()->where('step_id', 'system_public_info')->first();
-
-        if ($publicAnswer && is_array($publicAnswer->values)) {
-            $vals = $publicAnswer->values;
-            $price = $vals['listing_price'] ?? $vals['list_price'] ?? $vals['price'] ?? null;
-            $bedrooms = $vals['bedrooms'] ?? $vals['total_bedrooms'] ?? null;
-            $bathrooms = $vals['bathrooms'] ?? $vals['total_bathrooms'] ?? null;
-            $squareFeet = $vals['square_feet'] ?? $vals['ag_square_footage'] ?? null;
-            $propertyType = $vals['property_type'] ?? null;
-            $title = $vals['listing_title'] ?? null;
-        }
-
-        if (!$price && $this->relationLoaded('answers')) {
-            foreach ($this->answers as $ans) {
-                if (is_array($ans->values)) {
-                    if (!$price && isset($ans->values['list_price'])) {
-                        $price = $ans->values['list_price'];
-                    }
-                    if (!$price && isset($ans->values['listing_price'])) {
-                        $price = $ans->values['listing_price'];
-                    }
-                }
-            }
-        }
+        // Values come from the listing steps (see Listing::PUBLIC_FIELD_SOURCES); listings created
+        // with the old "Public Listing Information" step still read that step first.
+        $price = $this->publicValue('listing_price');
+        $bedrooms = $this->publicValue('bedrooms');
+        $bathrooms = $this->publicValue('bathrooms');
+        $squareFeet = $this->publicValue('square_feet');
+        $propertyType = $this->publicPropertyType();
+        $title = $this->publicTitle();
+        $remarks = $this->publicValue('remarks');
+        $directions = $this->publicValue('directions');
+        $compensation = $this->publicValue('compensation');
+        $compensationType = $this->publicValue('compensation_type');
+        $directBuyerRebate = $this->publicValue('direct_buyer_rebate');
+        $sellerConcessions = $this->publicValue('seller_concessions');
+        $yearBuilt = $this->publicValue('year_built');
 
         return [
             'id' => $this->id,
@@ -69,6 +51,7 @@ class ListingResource extends JsonResource
             'primaryPhotoUrl' => $primaryImage?->thumbnail_url ?? $primaryImage?->url,
             'offersCount' => $this->relationLoaded('offers') ? $this->offers->count() : $this->offers()->count(),
             'packageName' => $this->servicePackage?->name,
+            'packagePrice' => $this->servicePackage?->price !== null ? (float) $this->servicePackage->price : null,
             'statusChangedDate' => $this->status_changed_date?->toISOString(),
             'price' => $price ? (float)$price : null,
             'bedrooms' => $bedrooms !== null ? (int)$bedrooms : null,
@@ -76,6 +59,18 @@ class ListingResource extends JsonResource
             'squareFeet' => $squareFeet !== null ? (int)$squareFeet : null,
             'propertyType' => $propertyType,
             'listingTitle' => $title,
+            'remarks' => $remarks,
+            'directions' => $directions,
+            'compensation' => $compensation !== null ? (float)$compensation : null,
+            'compensationType' => $compensationType !== null ? (int)$compensationType : 1,
+            'directBuyerRebate' => $directBuyerRebate !== null ? (float)$directBuyerRebate : null,
+            'sellerConcessions' => $sellerConcessions !== null ? (float)$sellerConcessions : null,
+            'userId' => $this->user_id,
+            'isOwner' => $request->user() ? ((int) $this->user_id === (int) $request->user()->id) : false,
+            'canMakeOffer' => $request->user()
+                ? ((int) $this->user_id !== (int) $request->user()->id && in_array($this->status, ['published', 'under_contract', 'ccs'], true))
+                : in_array($this->status, ['published', 'under_contract', 'ccs'], true),
+            'yearBuilt' => $yearBuilt !== null ? (int)$yearBuilt : null,
         ];
     }
 }

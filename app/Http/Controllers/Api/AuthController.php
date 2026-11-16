@@ -40,7 +40,8 @@ class AuthController extends Controller
      */
     public function register(RegisterRequest $request): JsonResponse
     {
-        $role = UserRole::from($request->validated('userType'));
+        $userType = $request->validated('userType');
+        $role = UserRole::fromValue($userType);
         $isPendingAgent = $role === UserRole::Agent;
 
         $firstName = $request->validated('firstName');
@@ -279,6 +280,12 @@ class AuthController extends Controller
     {
         $user = $request->user()->loadMissing('currentAgentPackage.package');
 
-        return api_success(new UserResource($user));
+        $data = (new UserResource($user))->resolve($request);
+
+        // Admin "login as user" session: lets the frontend show the banner and "Return to admin"
+        $impersonator = \App\Http\Controllers\Api\Admin\ImpersonationController::impersonator($request);
+        $data['impersonatedBy'] = $impersonator ? ['id' => $impersonator->id, 'name' => $impersonator->name] : null;
+
+        return api_success($data);
     }
 }

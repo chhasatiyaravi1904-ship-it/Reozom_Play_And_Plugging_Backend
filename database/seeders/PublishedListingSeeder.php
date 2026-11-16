@@ -19,7 +19,7 @@ class PublishedListingSeeder extends Seeder
     {
         $seller = User::where('email', 'seller@example.com')->first()
             ?? User::where('email', 'seller@gmail.com')->first()
-            ?? User::where('role', \App\Enums\UserRole::Seller)->first()
+            ?? User::where('role', \App\Enums\UserRole::SellerBuyer)->first()
             ?? User::first();
 
         if (!$seller) {
@@ -31,7 +31,7 @@ class PublishedListingSeeder extends Seeder
             ?? User::first();
 
         $buyer = User::where('email', 'buyer@example.com')->first()
-            ?? User::where('role', \App\Enums\UserRole::Buyer)->first();
+            ?? User::where('role', \App\Enums\UserRole::SellerBuyer)->first();
 
         $miProcess = ListingProcess::where('name', 'Michigan Residential Listing Process')->first();
         $defaultProcess = ListingProcess::where('name', 'Residential Property Listing Process')->first()

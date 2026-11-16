@@ -15,6 +15,7 @@ class DatabaseSeeder extends Seeder
     public function run(): void
     {
         $this->call(UserSeeder::class);
+        $this->call(SellerBuyerUserSeeder::class);
         $this->call(PermissionSeeder::class);
         $this->call(PackageSeeder::class);
         $this->call(MlsSeeder::class);
@@ -22,10 +23,14 @@ class DatabaseSeeder extends Seeder
         $this->call(CountySeeder::class);
         $this->call(CitySeeder::class);
         $this->call(ZipCodeSeeder::class);
+        // Disclosures first: state listing processes copy their questions into disclosure steps
+        $this->call(ReozomStatutoryDisclosuresSeeder::class);
+        $this->call(DocumentTemplateSeeder::class);
         $this->call(ListingProcessSeeder::class);
         $this->call(MichiganListingProcessSeeder::class);
+        $this->call(FloridaListingProcessSeeder::class);
         $this->call(PublishedListingSeeder::class);
         $this->call(ReozomFullWorkflowSeeder::class);
-        $this->call(ReozomStatutoryDisclosuresSeeder::class);
+        $this->call(StateSampleListingSeeder::class);
     }
 }

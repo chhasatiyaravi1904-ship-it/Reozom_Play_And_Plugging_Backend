@@ -41,7 +41,13 @@ class UserController extends Controller
         }
 
         $this->applyActiveFilter($query, $request);
-        $this->applyExactFilter($query, $request, 'role');
+        if ($role = $request->query('role')) {
+            if (in_array(strtolower($role), ['seller_buyer', 'seller/buyer', 'buyer_seller', 'client', 'seller', 'buyer'], true)) {
+                $query->whereIn('role', ['seller_buyer', 'client', 'seller', 'buyer']);
+            } else {
+                $query->where('role', $role);
+            }
+        }
         $this->applySort($query, $request, self::SORTABLE, 'created_at');
 
         return $this->paginatedResponse($query, $request, UserResource::class);

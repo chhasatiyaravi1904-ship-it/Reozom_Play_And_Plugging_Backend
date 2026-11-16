@@ -177,6 +177,7 @@ class MichiganListingProcessSeeder extends Seeder
 
             // 6. Michigan Residential Listing Process (Primary)
             $residentialConfig = ListingProcessDefinitions::getResidentialProcessConfig();
+            $residentialCodes = ['mi_residential_appliances', 'mi_residential_conditions', 'lead_paint_disclosure'];
 
             ListingProcess::updateOrCreate(
                 [
@@ -188,7 +189,12 @@ class MichiganListingProcessSeeder extends Seeder
                     'agent_id' => null,
                     'service_package_id' => $michiganPackage->id,
                     'assigned_zips' => $allMiZipStrings,
-                    'config' => $residentialConfig,
+                    'required_disclosures' => $residentialCodes,
+                    'config' => ListingProcessDefinitions::withDisclosureSteps(
+                        $residentialConfig,
+                        ListingProcessDefinitions::RESIDENTIAL_LEGACY_DISCLOSURE_STEPS,
+                        $residentialCodes
+                    ),
                 ]
             );
 
@@ -208,7 +214,7 @@ class MichiganListingProcessSeeder extends Seeder
             );
 
             // 7. Michigan Vacant Land Listing Process
-            $vacantLandConfig = ListingProcessDefinitions::getVacantLandProcessConfig();
+            $vacantLandCodes = ['mi_vacant_land_disclosure'];
             ListingProcess::updateOrCreate(
                 [
                     'name' => 'Michigan Vacant Land Listing Process',
@@ -219,7 +225,12 @@ class MichiganListingProcessSeeder extends Seeder
                     'agent_id' => null,
                     'service_package_id' => null,
                     'assigned_zips' => $allMiZipStrings,
-                    'config' => $vacantLandConfig,
+                    'required_disclosures' => $vacantLandCodes,
+                    'config' => ListingProcessDefinitions::withDisclosureSteps(
+                        ListingProcessDefinitions::getVacantLandProcessConfig(),
+                        ListingProcessDefinitions::VACANT_LAND_LEGACY_DISCLOSURE_STEPS,
+                        $vacantLandCodes
+                    ),
                 ]
             );
         });

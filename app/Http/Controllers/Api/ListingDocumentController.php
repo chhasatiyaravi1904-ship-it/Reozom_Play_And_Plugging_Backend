@@ -44,6 +44,10 @@ class ListingDocumentController extends Controller
      */
     private function resolveRequirements(Listing $listing): array
     {
+        if ($listing->usesDisclosureSteps()) {
+            return $this->generatedRequirements($listing);
+        }
+
         // Automatically ensure statutory documents are provisioned
         $discService = app(DisclosureService::class);
         $discService->regenerateStatutoryDocuments($listing);
@@ -111,40 +115,71 @@ class ListingDocumentController extends Controller
             'category' => 'statutory',
             'signable' => true,
         ];
-        $requirements[] = [
-            'id' => 'deed',
-            'label' => 'Property Deed / Title',
-            'description' => 'Recorded copy of deed verifying current legal ownership.',
-            'required' => true,
-            'category' => 'required',
-            'signable' => false,
-        ];
-        $requirements[] = [
-            'id' => 'id_proof',
-            'label' => 'Government Photo ID',
-            'description' => 'Valid government-issued photo ID of the owner.',
-            'required' => true,
-            'category' => 'required',
-            'signable' => false,
-        ];
-        $requirements[] = [
-            'id' => 'tax_record',
-            'label' => 'Recent Property Tax Bill',
-            'description' => 'Latest municipal property tax assessment or bill.',
-            'required' => false,
-            'category' => 'supplementary',
-            'signable' => false,
-        ];
-        $requirements[] = [
-            'id' => 'hoa_rules',
-            'label' => 'HOA / Condominium Bylaws',
-            'description' => 'Bylaws, covenants, conditions, and restrictions.',
-            'required' => false,
-            'category' => 'supplementary',
-            'signable' => false,
-        ];
+        return array_merge($requirements, $this->uploadRequirements());
+    }
 
-        return $requirements;
+    /**
+     * Listings with disclosure steps: the documents generated from the document templates
+     * (state + property type set and rules), then the files the seller uploads.
+     */
+    private function generatedRequirements(Listing $listing): array
+    {
+        $generated = app(DisclosureService::class)->generateListingDocuments($listing);
+
+        $requirements = $generated->map(fn (ListingDocument $doc) => [
+            'id' => $doc->type,
+            'label' => $doc->template?->name ?? str_replace('.pdf', '', $doc->original_name),
+            'description' => $doc->template?->source === \App\Models\DocumentTemplate::SOURCE_DISCLOSURE
+                ? 'Generated from your disclosure answers.'
+                : 'Generated from your listing and package details.',
+            'required' => true,
+            'category' => 'statutory',
+            'signable' => (bool) ($doc->template?->requires_signature ?? true),
+            'generated' => true,
+        ])->all();
+
+        return array_merge($requirements, $this->uploadRequirements());
+    }
+
+    /**
+     * Files the seller uploads (not generated).
+     */
+    private function uploadRequirements(): array
+    {
+        return [
+            [
+                'id' => 'deed',
+                'label' => 'Property Deed / Title',
+                'description' => 'Recorded copy of deed verifying current legal ownership.',
+                'required' => true,
+                'category' => 'required',
+                'signable' => false,
+            ],
+            [
+                'id' => 'id_proof',
+                'label' => 'Government Photo ID',
+                'description' => 'Valid government-issued photo ID of the owner.',
+                'required' => true,
+                'category' => 'required',
+                'signable' => false,
+            ],
+            [
+                'id' => 'tax_record',
+                'label' => 'Recent Property Tax Bill',
+                'description' => 'Latest municipal property tax assessment or bill.',
+                'required' => false,
+                'category' => 'supplementary',
+                'signable' => false,
+            ],
+            [
+                'id' => 'hoa_rules',
+                'label' => 'HOA / Condominium Bylaws',
+                'description' => 'Bylaws, covenants, conditions, and restrictions.',
+                'required' => false,
+                'category' => 'supplementary',
+                'signable' => false,
+            ],
+        ];
     }
 
     /**
@@ -200,6 +235,7 @@ class ListingDocumentController extends Controller
                 'verificationCode' => $uploaded ? $uploaded->verification_code : null,
                 'isSignable' => $isSignable,
                 'isPreviewable' => $isSignable,
+                'isGenerated' => !empty($req['generated']),
                 'fileName' => $uploaded ? $uploaded->original_name : null,
                 'uploadedAt' => $uploaded ? $uploaded->created_at->toIso8601String() : null,
                 'fileSize' => $uploaded ? $uploaded->size : null,
@@ -310,7 +346,7 @@ class ListingDocumentController extends Controller
             ->first();
 
         if (!$document) {
-            app(DisclosureService::class)->regenerateStatutoryDocuments($listing);
+            app(DisclosureService::class)->provisionDocuments($listing);
             $document = $listing->documents()
                 ->where(fn($q) => $q->where('id', $documentId)->orWhere('type', $documentId))
                 ->first();
@@ -396,7 +432,7 @@ class ListingDocumentController extends Controller
         Gate::authorize('update', $listing);
 
         $discService = app(DisclosureService::class);
-        $discService->regenerateStatutoryDocuments($listing);
+        $discService->provisionDocuments($listing);
 
         $requirements = $this->resolveRequirements($listing);
         $statutoryTypes = array_column(
@@ -573,6 +609,11 @@ class ListingDocumentController extends Controller
             ->where(fn($q) => $q->where('id', $documentId)->orWhere('type', $documentId))
             ->firstOrFail();
 
+        // Generated documents are managed by the system (deleting would lose signatures and they are re-created anyway)
+        if ($document->document_template_id !== null) {
+            return api_error('Generated documents cannot be deleted. They are updated automatically from the listing answers.', 422);
+        }
+
         if (Storage::disk('local')->exists($document->path)) {
             Storage::disk('local')->delete($document->path);
         }
@@ -677,6 +718,24 @@ class ListingDocumentController extends Controller
             'sent_to' => $emails,
             'document' => $docName,
         ], 'Document has been sent to ' . implode(', ', $emails));
+    }
+
+    /**
+     * Re-render a generated document from the current answers (signed documents whose
+     * content changed go back to unsigned).
+     */
+    public function regenerate(Request $request, Listing $listing, $documentId): JsonResponse
+    {
+        Gate::authorize('update', $listing);
+
+        $document = $listing->documents()
+            ->where(fn ($q) => $q->where('id', $documentId)->orWhere('type', $documentId))
+            ->whereNotNull('document_template_id')
+            ->firstOrFail();
+
+        $document = app(DisclosureService::class)->regenerateDocument($listing, $document);
+
+        return api_success($document, 'Document regenerated from the current listing answers.');
     }
 
     /**
@@ -835,7 +894,10 @@ HTML;
 
         // Document specific body content
         $bodyContent = '';
-        if ($document->type === 'lead_disclosure') {
+        if (!empty($document->content)) {
+            // Generated from a document template (disclosure answers or agreement text)
+            $bodyContent = $document->content;
+        } elseif ($document->type === 'lead_disclosure') {
             $builtPre1978 = $this->formatAns($answers, 'built_before_1978', 'No (Constructed 1978 or Later)');
             $leadKnowledge = $this->formatAns($answers, 'lead_knowledge_id', 'Seller has no knowledge of lead-based paint and/or hazards in the housing.');
             $leadReports = $this->formatAns($answers, 'lead_reports_id', 'Seller has no reports or records pertaining to lead-based paint and/or hazards in the housing.');

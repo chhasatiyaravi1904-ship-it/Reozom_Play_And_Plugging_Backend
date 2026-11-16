@@ -3,112 +3,142 @@
 namespace App\Http\Controllers;
 
 use App\Models\ListingProcess;
+use App\Models\PropertyDisclosure;
 use App\Http\Requests\SaveListingProcessRequest;
 use Illuminate\Http\Request;
 
 class ListingProcessController extends Controller
 {
-    private function enforceSystemStep(array $config): array
+    /**
+     * Resolve the config and disclosure selection for an update.
+     *
+     * - Neither sent (rename, status toggle): the stored config is kept as is.
+     * - required_disclosures sent (settings modal): disclosure steps are synced to the selection.
+     * - Only config sent (builder): the disclosure steps in the config are the selection, so
+     *   deleting a disclosure step in the builder unselects it. Processes that have never used
+     *   disclosure steps keep their required_disclosures untouched.
+     */
+    private function applyConfigAndDisclosures(Request $request, array &$validated, ListingProcess $process): void
     {
-        $systemStepId = 'system_public_info';
-        $systemStepIndex = -1;
-        
-        foreach ($config as $index => $step) {
-            if (($step['id'] ?? '') === $systemStepId) {
-                $systemStepIndex = $index;
-                break;
-            }
-        }
-        
-        $systemStep = [
-            'id' => $systemStepId,
-            'name' => 'Public Listing Information',
-            'type' => 'public_listing',
-            'isSystem' => true,
-            'order' => 1,
-            'visible' => true,
-            'sections' => [
-                [
-                    'id' => 'public_basic_information',
-                    'order' => 1,
-                    'name' => 'Basic Information',
-                    'fields' => [
-                        [
-                            'id' => 'listing_title',
-                            'name' => 'listing_title',
-                            'label' => 'Listing Title',
-                            'type' => 'text',
-                            'required' => true,
-                            'active' => true,
-                        ],
-                        [
-                            'id' => 'listing_price',
-                            'name' => 'listing_price',
-                            'label' => 'Price',
-                            'type' => 'number',
-                            'required' => true,
-                            'active' => true,
-                        ],
-                        [
-                            'id' => 'property_type',
-                            'name' => 'property_type',
-                            'label' => 'Property Type',
-                            'type' => 'select',
-                            'required' => true,
-                            'active' => true,
-                            'options' => [
-                                ['label' => 'Single Family', 'value' => 'single_family'],
-                                ['label' => 'Condo', 'value' => 'condo'],
-                                ['label' => 'Townhouse', 'value' => 'townhouse']
-                            ]
-                        ],
-                        [
-                            'id' => 'bedrooms',
-                            'name' => 'bedrooms',
-                            'label' => 'Bedrooms',
-                            'type' => 'number',
-                            'required' => true,
-                            'active' => true,
-                        ],
-                        [
-                            'id' => 'bathrooms',
-                            'name' => 'bathrooms',
-                            'label' => 'Bathrooms',
-                            'type' => 'number',
-                            'required' => true,
-                            'active' => true,
-                        ],
-                        [
-                            'id' => 'square_feet',
-                            'name' => 'square_feet',
-                            'label' => 'Square Feet',
-                            'type' => 'number',
-                            'required' => true,
-                            'active' => true,
-                        ],
-                    ]
-                ]
-            ]
-        ];
+        $hasConfig = $request->has('config');
+        $hasDisclosures = $request->has('required_disclosures');
 
-        if ($systemStepIndex === -1) {
-            array_unshift($config, $systemStep);
-            $systemStepIndex = 0;
+        if (! $hasConfig && ! $hasDisclosures) {
+            unset($validated['config']);
+
+            return;
+        }
+
+        $config = $hasConfig ? ($validated['config'] ?? []) : ($process->config ?? []);
+
+        if ($hasDisclosures) {
+            $codes = $validated['required_disclosures'] ?? [];
+        } elseif ($process->hasDisclosureSteps() || ListingProcess::disclosureCodesFromConfig($config) !== []) {
+            $codes = ListingProcess::disclosureCodesFromConfig($config);
+            $validated['required_disclosures'] = $codes;
         } else {
-            $config[$systemStepIndex]['id'] = $systemStepId;
-            $config[$systemStepIndex]['type'] = 'public_listing';
-            $config[$systemStepIndex]['isSystem'] = true;
+            $validated['config'] = ListingProcess::enforceLockedSteps($config);
+
+            return;
         }
 
-        foreach ($config as $index => &$step) {
-            $step['order'] = $index + 1;
-            if (($step['id'] ?? '') === $systemStepId && $index !== $systemStepIndex) {
-                $step['id'] = 'step_' . uniqid();
-                unset($step['type'], $step['isSystem']);
+        $validated['config'] = ListingProcess::enforceLockedSteps(ListingProcess::syncDisclosureSteps($config, $codes));
+    }
+
+    /**
+     * Same ownership rules as update/destroy: agents modify only their own processes,
+     * admins modify only system (agent-less) processes.
+     */
+    private function denyModify($user, ListingProcess $process)
+    {
+        if (! $user->isAdmin() && ! $user->isAgent()) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        if ($user->isAgent() && $process->agent_id !== $user->id) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        if ($user->isAdmin() && $process->agent_id !== null) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        return null;
+    }
+
+    private function denyAgentPackageLimit($user)
+    {
+        $blocker = ListingProcess::agentCreationBlocker($user);
+
+        return $blocker ? response()->json(['message' => $blocker[1]], $blocker[0]) : null;
+    }
+
+    /**
+     * Copy a process (typically a system default) into a new custom process the user can edit,
+     * including its disclosure steps and questions.
+     */
+    public function copy(Request $request, ListingProcess $listingProcess)
+    {
+        $user = $request->user();
+
+        if (! $user->isAdmin() && ! $user->isAgent()) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        $canSee = $user->isAgent()
+            ? ($listingProcess->agent_id === $user->id || ($listingProcess->agent_id === null && $listingProcess->type === 'default'))
+            : $listingProcess->agent_id === null;
+
+        if (! $canSee) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        if ($user->isAgent() && ($error = $this->denyAgentPackageLimit($user))) {
+            return $error;
+        }
+
+        $validated = $request->validate(['name' => 'nullable|string|max:255']);
+
+        $copy = $listingProcess->copyFor(
+            $user->isAgent() ? $user->id : null,
+            $validated['name'] ?? $listingProcess->name.' (Copy)'
+        );
+
+        return response()->json($copy, 201);
+    }
+
+    /**
+     * Replace a customized disclosure step with a fresh copy of the master disclosure questions.
+     */
+    public function resetDisclosureStep(Request $request, ListingProcess $listingProcess, string $code)
+    {
+        if ($error = $this->denyModify($request->user(), $listingProcess)) {
+            return $error;
+        }
+
+        $master = PropertyDisclosure::where('code', $code)->first();
+        if (! $master) {
+            return response()->json(['message' => 'Disclosure not found.'], 404);
+        }
+
+        $config = $listingProcess->config ?? [];
+        $found = false;
+        foreach ($config as $index => $step) {
+            if (ListingProcess::isDisclosureStep($step) && $step['disclosure_code'] === $code) {
+                $fresh = ListingProcess::buildDisclosureStep($master);
+                $fresh['order'] = $step['order'] ?? $index + 1;
+                $config[$index] = $fresh;
+                $found = true;
             }
         }
-        
-        return $config;
+
+        if (! $found) {
+            return response()->json(['message' => 'This process has no step for that disclosure.'], 404);
+        }
+
+        $listingProcess->update(['config' => $config]);
+
+        return response()->json($listingProcess->fresh());
     }
 
     /**
@@ -134,6 +164,23 @@ class ListingProcessController extends Controller
         }
 
         return response()->json($query->get());
+    }
+
+    /**
+     * Document templates a process can generate (for the Documents toggles in process settings).
+     */
+    public function documentTemplates(Request $request)
+    {
+        $user = $request->user();
+        if (! $user->isAdmin() && ! $user->isAgent()) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        return response()->json(
+            \App\Models\DocumentTemplate::active()
+                ->orderBy('state_code')->orderBy('property_type')->orderBy('order')
+                ->get(['id', 'code', 'name', 'state_code', 'property_type', 'source', 'disclosure_codes', 'requires_signature'])
+        );
     }
 
     /**
@@ -178,18 +225,8 @@ class ListingProcessController extends Controller
             return response()->json(['message' => 'Unauthorized'], 403);
         }
 
-        if ($user->isAgent()) {
-            if (!$user->hasActivePackage()) {
-                return response()->json(['message' => 'Active package required to create listing processes.'], 403);
-            }
-
-            $activePackage = $user->currentAgentPackage?->package;
-            if ($activePackage && $activePackage->max_listing_processes !== null) {
-                $count = $user->listingProcesses()->count();
-                if ($count >= $activePackage->max_listing_processes) {
-                    return response()->json(['message' => 'Package limit reached.'], 422);
-                }
-            }
+        if ($user->isAgent() && ($error = $this->denyAgentPackageLimit($user))) {
+            return $error;
         }
 
         $validated = $request->validated();
@@ -204,7 +241,10 @@ class ListingProcessController extends Controller
             $validated['agent_id'] = null;
         }
 
-        $validated['config'] = $this->enforceSystemStep($validated['config'] ?? []);
+        $validated['config'] = ListingProcess::enforceLockedSteps(ListingProcess::syncDisclosureSteps(
+            $validated['config'] ?? [],
+            $validated['required_disclosures'] ?? []
+        ));
 
         if (($validated['type'] ?? null) === 'default') {
             $query = ListingProcess::where('type', 'default');
@@ -270,7 +310,7 @@ class ListingProcessController extends Controller
             unset($validated['agent_id']);
         }
 
-        $validated['config'] = $this->enforceSystemStep($validated['config'] ?? []);
+        $this->applyConfigAndDisclosures($request, $validated, $listingProcess);
 
         if (($validated['type'] ?? null) === 'default' && $listingProcess->type !== 'default') {
             $query = ListingProcess::where('type', 'default');

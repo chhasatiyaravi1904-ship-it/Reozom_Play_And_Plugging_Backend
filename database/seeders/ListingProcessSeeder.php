@@ -94,7 +94,7 @@ class ListingProcessSeeder extends Seeder
                     'type' => 'custom',
                     'status' => 'active',
                     'assigned_zips' => [],
-                    'config' => $sampleConfig,
+                    'config' => ListingProcess::enforceLockedSteps($sampleConfig),
                 ]
             );
         });

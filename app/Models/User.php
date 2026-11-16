@@ -9,6 +9,7 @@ use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
@@ -41,10 +42,17 @@ class User extends Authenticatable implements MustVerifyEmail
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
-            'role' => UserRole::class,
             'profile_finished' => 'boolean',
             'is_active' => 'boolean',
         ];
+    }
+
+    protected function role(): Attribute
+    {
+        return Attribute::make(
+            get: fn ($value) => $value instanceof UserRole ? $value : UserRole::fromValue($value),
+            set: fn ($value) => $value instanceof UserRole ? $value->value : UserRole::fromValue($value)->value,
+        );
     }
 
     public function scopeActive(Builder $query): Builder
@@ -79,14 +87,29 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->role === UserRole::Agent || ($this->role instanceof UserRole ? $this->role->value === 'agent' : (string) $this->role === 'agent');
     }
 
+    public function isSellerBuyer(): bool
+    {
+        if ($this->role === UserRole::SellerBuyer) {
+            return true;
+        }
+
+        $roleVal = $this->role instanceof UserRole ? $this->role->value : (string) $this->role;
+        return in_array(strtolower((string) $roleVal), ['seller_buyer', 'seller/buyer', 'buyer_seller', 'client', 'seller', 'buyer'], true);
+    }
+
+    public function isClient(): bool
+    {
+        return $this->isSellerBuyer();
+    }
+
     public function isSeller(): bool
     {
-        return $this->role === UserRole::Seller || ($this->role instanceof UserRole ? $this->role->value === 'seller' : (string) $this->role === 'seller');
+        return $this->isSellerBuyer();
     }
 
     public function isBuyer(): bool
     {
-        return $this->role === UserRole::Buyer || ($this->role instanceof UserRole ? $this->role->value === 'buyer' : (string) $this->role === 'buyer');
+        return $this->isSellerBuyer();
     }
 
     /**

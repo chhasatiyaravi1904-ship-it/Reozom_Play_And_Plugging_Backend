@@ -2,9 +2,11 @@
 
 namespace App\Services;
 
+use App\Models\DocumentTemplate;
 use App\Models\Listing;
 use App\Models\ListingAnswer;
 use App\Models\ListingDocument;
+use App\Models\ListingProcess;
 use Illuminate\Support\Str;
 
 class DisclosureService
@@ -599,5 +601,189 @@ class DisclosureService
         if (!empty($unselectedTypes)) {
             $listing->documents()->whereIn('type', $unselectedTypes)->delete();
         }
+    }
+
+    /**
+     * Make sure a listing has its documents: listings with disclosure steps use document templates,
+     * older listings keep the previous statutory document set.
+     */
+    public function provisionDocuments(Listing $listing): void
+    {
+        if ($listing->usesDisclosureSteps()) {
+            $this->generateListingDocuments($listing);
+        } else {
+            $this->regenerateStatutoryDocuments($listing);
+        }
+    }
+
+    /**
+     * Templates that apply to a listing, like the original Reozom DocumentsService:
+     * state + property type set, filtered by the process document list, the template rules
+     * (HOA mandatory, year built, trust...) and, for disclosure documents, whether the
+     * disclosure step applies to this listing (Single Family vs Condo, skipped for trusts).
+     */
+    public function applicableTemplates(Listing $listing, ?array $values = null): \Illuminate\Support\Collection
+    {
+        $listing->loadMissing(['answers', 'listingProcess']);
+        $values ??= $listing->answerValues();
+
+        $group = $listing->publicPropertyType() === 'vacant_land' ? 'vacant_land' : 'residential';
+        $enabled = $listing->listingProcess?->documents;
+
+        $activeDisclosureCodes = ListingProcess::disclosureCodesFromConfig($listing->activeSteps($values));
+
+        return DocumentTemplate::active()
+            ->for($listing->getStateCode(), $group)
+            ->orderBy('order')
+            ->get()
+            ->filter(fn (DocumentTemplate $t) => $enabled === null || in_array($t->code, (array) $enabled, true))
+            ->filter(fn (DocumentTemplate $t) => ListingProcess::conditionMatches($t->rules, $values))
+            ->filter(fn (DocumentTemplate $t) => $t->source !== DocumentTemplate::SOURCE_DISCLOSURE
+                || array_intersect((array) $t->disclosure_codes, $activeDisclosureCodes) !== [])
+            ->values();
+    }
+
+    /**
+     * Create or refresh the listing's generated documents. Signed documents are never changed
+     * or removed; unsigned documents that no longer apply are removed.
+     */
+    public function generateListingDocuments(Listing $listing): \Illuminate\Support\Collection
+    {
+        $listing->load(['answers', 'listingProcess', 'user', 'servicePackage']);
+        $values = $listing->answerValues();
+        $templates = $this->applicableTemplates($listing, $values);
+
+        $documents = collect();
+        foreach ($templates as $template) {
+            $content = $this->renderTemplateContent($listing, $template, $values);
+            $document = $listing->documents()->where('document_template_id', $template->id)->first();
+
+            if (! $document) {
+                $document = $listing->documents()->create([
+                    'user_id' => $listing->user_id,
+                    'type' => $template->code,
+                    'document_template_id' => $template->id,
+                    'content' => $content,
+                    'original_name' => "{$template->name}.pdf",
+                    'path' => "listings/{$listing->id}/generated/{$template->code}.html",
+                    'mime_type' => 'application/pdf',
+                    'size' => strlen($content),
+                    'status' => 'unsigned',
+                    'admin_notes' => 'Generated from the listing answers.',
+                ]);
+            } elseif ($document->status !== 'signed' && $document->content !== $content) {
+                $document->update(['content' => $content, 'size' => strlen($content)]);
+            }
+
+            $documents->push($document);
+        }
+
+        $listing->documents()
+            ->whereNotNull('document_template_id')
+            ->whereNotIn('document_template_id', $templates->pluck('id'))
+            ->where('status', '!=', 'signed')
+            ->delete();
+
+        return $documents;
+    }
+
+    /**
+     * Re-render one generated document from the current answers. A signed document whose
+     * content changed goes back to unsigned so it can be signed again.
+     */
+    public function regenerateDocument(Listing $listing, ListingDocument $document): ListingDocument
+    {
+        $template = $document->template;
+        if (! $template) {
+            return $document;
+        }
+
+        $listing->load(['answers', 'user', 'servicePackage']);
+        $content = $this->renderTemplateContent($listing, $template, $listing->answerValues());
+
+        if ($document->content !== $content) {
+            $document->update([
+                'content' => $content,
+                'size' => strlen($content),
+                'status' => 'unsigned',
+                'signed_at' => null,
+                'signed_by' => null,
+                'signature_image' => null,
+            ]);
+        }
+
+        return $document;
+    }
+
+    private function renderTemplateContent(Listing $listing, DocumentTemplate $template, array $values): string
+    {
+        if ($template->source === DocumentTemplate::SOURCE_DISCLOSURE) {
+            return $this->renderDisclosureContent($listing, $template, $values);
+        }
+
+        $price = $listing->publicValue('listing_price');
+        $placeholders = [
+            '{{seller_name}}' => $listing->user?->name ?? 'Property Owner',
+            '{{property_address}}' => trim(implode(', ', array_filter([$listing->address, $listing->city, $listing->state, $listing->zip]))),
+            '{{list_price}}' => is_numeric($price) ? '$'.number_format((float) $price) : 'the agreed price',
+            '{{package_name}}' => $listing->servicePackage?->name ?? 'selected',
+            '{{reference_code}}' => (string) $listing->reference_code,
+            '{{date}}' => now()->format('F j, Y'),
+        ];
+
+        return strtr((string) $template->body, array_map(fn ($v) => e($v), $placeholders));
+    }
+
+    /**
+     * Questions and answers from the listing's own disclosure steps, so questions an agent
+     * added or edited in their process appear in the document.
+     */
+    private function renderDisclosureContent(Listing $listing, DocumentTemplate $template, array $values): string
+    {
+        $codes = (array) $template->disclosure_codes;
+        $html = '';
+
+        foreach ($listing->activeSteps($values) as $step) {
+            if (! ListingProcess::isDisclosureStep($step) || ! in_array($step['disclosure_code'], $codes, true)) {
+                continue;
+            }
+
+            $html .= '<h3 style="margin:18px 0 6px;font-size:15px;">'.e($step['name'] ?? '').'</h3>';
+
+            foreach ($step['sections'] ?? [] as $section) {
+                $rows = '';
+                foreach ($section['fields'] ?? [] as $field) {
+                    if (($field['active'] ?? true) === false) {
+                        continue;
+                    }
+                    if (! empty($field['showIf']) && ! ListingProcess::conditionMatches($field['showIf'], $values)) {
+                        continue;
+                    }
+
+                    $rows .= '<tr><td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;width:62%;">'.e($field['label'] ?? $field['name'] ?? '')
+                        .'</td><td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;font-weight:600;">'
+                        .e($this->formatAnswer($field, $values[$field['name'] ?? $field['id'] ?? ''] ?? null)).'</td></tr>';
+                }
+
+                if ($rows !== '') {
+                    $html .= '<h4 style="margin:12px 0 4px;font-size:13px;color:#334155;">'.e($section['name'] ?? '').'</h4>'
+                        .'<table style="width:100%;border-collapse:collapse;font-size:12px;">'.$rows.'</table>';
+                }
+            }
+        }
+
+        return $html;
+    }
+
+    private function formatAnswer(array $field, mixed $value): string
+    {
+        if ($value === null || $value === '' || $value === []) {
+            return 'Not answered';
+        }
+
+        $labels = array_column($field['options'] ?? [], 'label', 'value');
+        $format = fn ($v) => $labels[(string) $v] ?? (is_bool($v) ? ($v ? 'Yes' : 'No') : (string) $v);
+
+        return is_array($value) ? implode(', ', array_map($format, $value)) : $format($value);
     }
 }

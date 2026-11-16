@@ -20,7 +20,7 @@ class RegisterRequest extends FormRequest
     /**
      * Get the validation rules that apply to the request.
      *
-     * Public self-registration accepts agent/seller/buyer as the account
+     * Public self-registration accepts agent or seller/buyer as the account
      * type — never admin, which stays provisioned separately. Agent
      * accounts additionally require admin approval before they can log in
      * (handled in AuthController::register), but that's an activation
@@ -31,7 +31,7 @@ class RegisterRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'userType' => ['required', Rule::in(['agent', 'seller', 'buyer'])],
+            'userType' => ['required', Rule::in(['agent', 'seller_buyer', 'seller/buyer', 'client', 'seller', 'buyer'])],
             'firstName' => ['required', 'string', 'max:255'],
             'lastName' => ['required', 'string', 'max:255'],
             'email' => ['required', 'string', 'email', 'max:255', 'unique:users,email'],

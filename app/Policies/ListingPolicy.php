@@ -34,6 +34,11 @@ class ListingPolicy
             return true;
         }
 
+        // Published / on-market listings are viewable by any authenticated user (buyers, sellers, agents)
+        if (in_array($listing->status, ['published', 'under_contract', 'ccs', 'contingent_continue_to_show', 'sold'], true)) {
+            return true;
+        }
+
         return false;
     }
 
@@ -93,6 +98,11 @@ class ListingPolicy
         }
 
         if ($user->isAgent() && $listing->servicePackage && $listing->servicePackage->agent_id === $user->id) {
+            return true;
+        }
+
+        // Published / on-market listings are viewable by any authenticated user (buyers, sellers, agents)
+        if (in_array($listing->status, ['published', 'under_contract', 'ccs', 'contingent_continue_to_show', 'sold'], true)) {
             return true;
         }
 

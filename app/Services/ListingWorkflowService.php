@@ -102,8 +102,13 @@ class ListingWorkflowService
         $answeredStepIds = $listing->answers()
             ->pluck('step_id')
             ->toArray();
-            
-        $validCompletedSteps = array_intersect($snapshotStepIds, $answeredStepIds);
+
+        // Steps that don't apply to this listing (e.g. the Condo disclosure for a single family
+        // home, or disclosures for a trust-owned non-owner-occupied property) count as complete.
+        $activeStepIds = array_column($listing->activeSteps(), 'id');
+        $skippedStepIds = array_diff($snapshotStepIds, $activeStepIds);
+
+        $validCompletedSteps = array_merge(array_intersect($snapshotStepIds, $answeredStepIds), $skippedStepIds);
         $completedCount = count(array_unique($validCompletedSteps));
 
         $listing->update([

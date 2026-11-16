@@ -3,8 +3,12 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\ListingProcess;
 use App\Models\ServicePackage;
+use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 class ServicePackageController extends Controller
 {
@@ -40,27 +44,49 @@ class ServicePackageController extends Controller
         $processId = $validated['listing_process_id'] ?? null;
         unset($validated['listing_process_id']);
 
-        if ($processId) {
-            $processExists = \App\Models\ListingProcess::where('id', $processId)
-                ->where('agent_id', $request->user()->id)
-                ->exists();
-            if (!$processExists && $request->user()->isAgent()) {
-                return response()->json(['errors' => ['listing_process_id' => ['Unauthorized listing process.']]], 422);
+        $package = DB::transaction(function () use ($request, $validated, $processId) {
+            $process = $processId ? $this->resolveProcessForPackage($request->user(), (int) $processId, $validated['name']) : null;
+
+            $package = ServicePackage::create(\Illuminate\Support\Arr::except($validated, ['assigned_zips']));
+
+            $process?->update(['service_package_id' => $package->id]);
+
+            if (!empty($validated['assigned_zips'])) {
+                $zipIds = \App\Models\ZipCode::whereIn('code', $validated['assigned_zips'])->pluck('id');
+                $package->zipCodes()->sync($zipIds);
             }
-        }
 
-        $package = ServicePackage::create(\Illuminate\Support\Arr::except($validated, ['assigned_zips']));
-
-        if ($processId) {
-            \App\Models\ListingProcess::where('id', $processId)->update(['service_package_id' => $package->id]);
-        }
-
-        if (!empty($validated['assigned_zips'])) {
-            $zipIds = \App\Models\ZipCode::whereIn('code', $validated['assigned_zips'])->pluck('id');
-            $package->zipCodes()->sync($zipIds);
-        }
+            return $package;
+        });
 
         return response()->json($package->load('zipCodes'), 201);
+    }
+
+    /**
+     * Agents link their own processes. A shared system default can only belong to one package,
+     * so picking one gives the agent their own copy (with all steps and disclosure questions).
+     */
+    private function resolveProcessForPackage(User $user, int $processId, string $packageName): ListingProcess
+    {
+        $process = ListingProcess::findOrFail($processId);
+
+        if (! $user->isAgent() || $process->agent_id === $user->id) {
+            return $process;
+        }
+
+        if (! $process->isSystemDefault()) {
+            throw ValidationException::withMessages([
+                'listing_process_id' => 'Select one of your own listing processes or a system default process.',
+            ]);
+        }
+
+        if ($blocker = ListingProcess::agentCreationBlocker($user)) {
+            throw ValidationException::withMessages([
+                'listing_process_id' => "Can't copy the system process for this package: {$blocker[1]}",
+            ]);
+        }
+
+        return $process->copyFor($user->id, "{$process->name} - {$packageName}");
     }
 
     public function show(Request $request, ServicePackage $servicePackage)
@@ -99,32 +125,31 @@ class ServicePackageController extends Controller
         $hasProcessKey = array_key_exists('listing_process_id', $validated);
         unset($validated['listing_process_id']);
 
-        if ($hasProcessKey && $processId) {
-            $processExists = \App\Models\ListingProcess::where('id', $processId)
-                ->where('agent_id', $request->user()->id)
-                ->exists();
-            if (!$processExists && $request->user()->isAgent()) {
-                return response()->json(['errors' => ['listing_process_id' => ['Unauthorized listing process.']]], 422);
-            }
-        }
+        DB::transaction(function () use ($request, $servicePackage, $validated, $processId, $hasProcessKey) {
+            // Re-selecting the process already linked to this package must not create another copy
+            $alreadyLinked = $processId && ListingProcess::where('id', $processId)
+                ->where('service_package_id', $servicePackage->id)->exists();
 
-        $servicePackage->update(\Illuminate\Support\Arr::except($validated, ['assigned_zips']));
+            $process = ($hasProcessKey && $processId && ! $alreadyLinked)
+                ? $this->resolveProcessForPackage($request->user(), (int) $processId, $validated['name'] ?? $servicePackage->name)
+                : null;
 
-        if ($hasProcessKey) {
-            \App\Models\ListingProcess::where('service_package_id', $servicePackage->id)->update(['service_package_id' => null]);
-            if ($processId) {
-                \App\Models\ListingProcess::where('id', $processId)->update(['service_package_id' => $servicePackage->id]);
-            }
-        }
+            $servicePackage->update(\Illuminate\Support\Arr::except($validated, ['assigned_zips']));
 
-        if (array_key_exists('assigned_zips', $validated)) {
-            if (!empty($validated['assigned_zips'])) {
-                $zipIds = \App\Models\ZipCode::whereIn('code', $validated['assigned_zips'])->pluck('id');
-                $servicePackage->zipCodes()->sync($zipIds);
-            } else {
-                $servicePackage->zipCodes()->detach();
+            if ($hasProcessKey && ! $alreadyLinked) {
+                ListingProcess::where('service_package_id', $servicePackage->id)->update(['service_package_id' => null]);
+                $process?->update(['service_package_id' => $servicePackage->id]);
             }
-        }
+
+            if (array_key_exists('assigned_zips', $validated)) {
+                if (!empty($validated['assigned_zips'])) {
+                    $zipIds = \App\Models\ZipCode::whereIn('code', $validated['assigned_zips'])->pluck('id');
+                    $servicePackage->zipCodes()->sync($zipIds);
+                } else {
+                    $servicePackage->zipCodes()->detach();
+                }
+            }
+        });
 
         return response()->json($servicePackage->load('zipCodes'));
     }

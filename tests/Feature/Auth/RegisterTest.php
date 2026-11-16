@@ -14,7 +14,7 @@ class RegisterTest extends TestCase
     public function test_user_can_register_with_valid_data(): void
     {
         $response = $this->postJson('/api/auth/register', [
-            'userType' => 'seller',
+            'userType' => 'seller_buyer',
             'firstName' => 'Jane',
             'lastName' => 'Doe',
             'email' => 'jane@example.com',
@@ -29,12 +29,12 @@ class RegisterTest extends TestCase
 
         $response->assertCreated();
         $response->assertJsonPath('data.user.email', 'jane@example.com');
-        $response->assertJsonPath('data.user.role', UserRole::Seller->value);
+        $response->assertJsonPath('data.user.role', UserRole::SellerBuyer->value);
         $response->assertJsonStructure(['data' => ['token', 'user']]);
 
         $this->assertDatabaseHas('users', [
             'email' => 'jane@example.com',
-            'role' => UserRole::Seller->value,
+            'role' => UserRole::SellerBuyer->value,
         ]);
     }
 
@@ -43,7 +43,7 @@ class RegisterTest extends TestCase
         User::factory()->create(['email' => 'jane@example.com']);
 
         $response = $this->postJson('/api/auth/register', [
-            'userType' => 'seller',
+            'userType' => 'seller_buyer',
             'firstName' => 'Jane',
             'lastName' => 'Doe',
             'email' => 'jane@example.com',
@@ -63,7 +63,7 @@ class RegisterTest extends TestCase
     public function test_registration_fails_when_passwords_do_not_match(): void
     {
         $response = $this->postJson('/api/auth/register', [
-            'userType' => 'seller',
+            'userType' => 'seller_buyer',
             'firstName' => 'Jane',
             'lastName' => 'Doe',
             'email' => 'jane@example.com',
@@ -78,5 +78,37 @@ class RegisterTest extends TestCase
 
         $response->assertUnprocessable();
         $response->assertJsonValidationErrors('password');
+    }
+
+    public function test_user_can_register_as_client(): void
+    {
+        $response = $this->postJson('/api/auth/register', [
+            'userType' => 'client',
+            'firstName' => 'Alex',
+            'lastName' => 'Client',
+            'email' => 'alex@example.com',
+            'phone' => '555-987-6543',
+            'streetAddress' => '456 Oak St',
+            'city' => 'Detroit',
+            'state' => 'MI',
+            'zip' => '48201',
+            'password' => 'password',
+            'passwordConfirmation' => 'password',
+        ]);
+
+        $response->assertCreated();
+        $response->assertJsonPath('data.user.email', 'alex@example.com');
+        $response->assertJsonPath('data.user.role', UserRole::SellerBuyer->value);
+
+        $this->assertDatabaseHas('users', [
+            'email' => 'alex@example.com',
+            'role' => UserRole::SellerBuyer->value,
+        ]);
+
+        $user = User::where('email', 'alex@example.com')->first();
+        $this->assertTrue($user->isClient());
+        $this->assertTrue($user->isSeller());
+        $this->assertTrue($user->isBuyer());
+        $this->assertTrue($user->isSellerBuyer());
     }
 }

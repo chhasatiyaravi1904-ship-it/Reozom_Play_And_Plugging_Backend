@@ -4,6 +4,28 @@ namespace Database\Seeders;
 
 class ListingProcessDefinitions
 {
+    /** Hardcoded disclosure-style steps in the base configs, replaced by real disclosure steps for state processes. */
+    public const RESIDENTIAL_LEGACY_DISCLOSURE_STEPS = ['step_disclosures_appliances', 'step_disclosures_property'];
+
+    public const VACANT_LAND_LEGACY_DISCLOSURE_STEPS = ['step_disclosures'];
+
+    /**
+     * Build a state process config: drop the hardcoded disclosure steps and insert
+     * editable disclosure steps for the given disclosure codes (before the pictures step).
+     * Requires the property_disclosures table to be seeded first.
+     */
+    public static function withDisclosureSteps(array $config, array $legacyStepIds, array $disclosureCodes): array
+    {
+        $config = array_values(array_filter(
+            $config,
+            fn ($step) => ! in_array($step['id'] ?? '', $legacyStepIds, true)
+        ));
+
+        return \App\Models\ListingProcess::enforceLockedSteps(
+            \App\Models\ListingProcess::syncDisclosureSteps($config, $disclosureCodes)
+        );
+    }
+
     /**
      * Get the Residential Property Listing Process configuration.
      *
@@ -11,89 +33,7 @@ class ListingProcessDefinitions
      */
     public static function getResidentialProcessConfig(): array
     {
-        return [
-            // STEP 1: Public Listing Information (System Step required by ListingProcessController)
-            [
-                'id' => 'system_public_info',
-                'order' => 1,
-                'name' => 'Public Listing Information',
-                'description' => 'Core summary details visible on public listing search cards and property headers.',
-                'type' => 'public_listing',
-                'isSystem' => true,
-                'visible' => true,
-                'sections' => [
-                    [
-                        'id' => 'public_basic_information',
-                        'order' => 1,
-                        'name' => 'Basic Information',
-                        'description' => 'Key marketing attributes for public search displays.',
-                        'fields' => [
-                            [
-                                'id' => 'listing_title',
-                                'name' => 'listing_title',
-                                'label' => 'Listing Title',
-                                'type' => 'text',
-                                'required' => true,
-                                'active' => true,
-                                'showInExport' => true,
-                                'helpText' => 'E.g., Beautiful 4 Bedroom Colonial in Ann Arbor Hills',
-                            ],
-                            [
-                                'id' => 'listing_price',
-                                'name' => 'listing_price',
-                                'label' => 'Price',
-                                'type' => 'number',
-                                'required' => true,
-                                'active' => true,
-                                'showInExport' => true,
-                                'helpText' => 'Listing purchase price in USD ($)',
-                            ],
-                            [
-                                'id' => 'property_type',
-                                'name' => 'property_type',
-                                'label' => 'Property Type',
-                                'type' => 'select',
-                                'required' => true,
-                                'active' => true,
-                                'showInExport' => true,
-                                'options' => [
-                                    ['label' => 'Single Family', 'value' => 'single_family'],
-                                    ['label' => 'Condo', 'value' => 'condo'],
-                                    ['label' => 'Townhouse', 'value' => 'townhouse'],
-                                ],
-                            ],
-                            [
-                                'id' => 'bedrooms',
-                                'name' => 'bedrooms',
-                                'label' => 'Bedrooms',
-                                'type' => 'number',
-                                'required' => true,
-                                'active' => true,
-                                'showInExport' => true,
-                            ],
-                            [
-                                'id' => 'bathrooms',
-                                'name' => 'bathrooms',
-                                'label' => 'Bathrooms',
-                                'type' => 'number',
-                                'required' => true,
-                                'active' => true,
-                                'showInExport' => true,
-                            ],
-                            [
-                                'id' => 'square_feet',
-                                'name' => 'square_feet',
-                                'label' => 'Square Feet',
-                                'type' => 'number',
-                                'required' => true,
-                                'active' => true,
-                                'showInExport' => true,
-                            ],
-                        ],
-                    ],
-                ],
-            ],
-
+        return \App\Models\ListingProcess::enforceLockedSteps([
             // STEP 2: Property Type & Address
             [
                 'id' => 'step_property_type_address',
@@ -2057,7 +1997,7 @@ class ListingProcessDefinitions
                     ],
                 ],
             ],
-        ];
+        ]);
     }
 
     /**
@@ -2067,93 +2007,7 @@ class ListingProcessDefinitions
      */
     public static function getVacantLandProcessConfig(): array
     {
-        return [
-            // STEP 1: Public Listing Information (System Step required by ListingProcessController)
-            [
-                'id' => 'system_public_info',
-                'order' => 1,
-                'name' => 'Public Listing Information',
-                'description' => 'Core summary details visible on public listing search cards and property headers.',
-                'type' => 'public_listing',
-                'isSystem' => true,
-                'visible' => true,
-                'sections' => [
-                    [
-                        'id' => 'public_basic_information',
-                        'order' => 1,
-                        'name' => 'Basic Information',
-                        'description' => 'Key marketing attributes for vacant land listings.',
-                        'fields' => [
-                            [
-                                'id' => 'listing_title',
-                                'name' => 'listing_title',
-                                'label' => 'Listing Title',
-                                'type' => 'text',
-                                'required' => true,
-                                'active' => true,
-                                'showInExport' => true,
-                                'helpText' => 'E.g., 10 Acre Wooded Parcel with Rolling Terrain',
-                            ],
-                            [
-                                'id' => 'listing_price',
-                                'name' => 'listing_price',
-                                'label' => 'Price',
-                                'type' => 'number',
-                                'required' => true,
-                                'active' => true,
-                                'showInExport' => true,
-                                'helpText' => 'Listing purchase price in USD ($)',
-                            ],
-                            [
-                                'id' => 'property_type',
-                                'name' => 'property_type',
-                                'label' => 'Property Type',
-                                'type' => 'select',
-                                'required' => true,
-                                'active' => true,
-                                'defaultValue' => 'land',
-                                'showInExport' => true,
-                                'options' => [
-                                    ['label' => 'Vacant Land', 'value' => 'land'],
-                                    ['label' => 'Single Family', 'value' => 'single_family'],
-                                    ['label' => 'Condo', 'value' => 'condo'],
-                                ],
-                            ],
-                            [
-                                'id' => 'bedrooms',
-                                'name' => 'bedrooms',
-                                'label' => 'Bedrooms',
-                                'type' => 'number',
-                                'required' => true,
-                                'active' => true,
-                                'defaultValue' => '0',
-                                'showInExport' => true,
-                            ],
-                            [
-                                'id' => 'bathrooms',
-                                'name' => 'bathrooms',
-                                'label' => 'Bathrooms',
-                                'type' => 'number',
-                                'required' => true,
-                                'active' => true,
-                                'defaultValue' => '0',
-                                'showInExport' => true,
-                            ],
-                            [
-                                'id' => 'square_feet',
-                                'name' => 'square_feet',
-                                'label' => 'Square Feet',
-                                'type' => 'number',
-                                'required' => true,
-                                'active' => true,
-                                'defaultValue' => '0',
-                                'showInExport' => true,
-                            ],
-                        ],
-                    ],
-                ],
-            ],
-
+        return \App\Models\ListingProcess::enforceLockedSteps([
             // STEP 2: Property Type & Address
             [
                 'id' => 'step_property_type_address',
@@ -3400,6 +3254,6 @@ class ListingProcessDefinitions
                     ],
                 ],
             ],
-        ];
+        ]);
     }
 }

@@ -57,7 +57,7 @@ class UserSeeder extends Seeder
                 'last_name' => 'User',
                 'email' => 'seller@example.com',
                 'password' => Hash::make('password'),
-                'role' => \App\Enums\UserRole::Seller,
+                'role' => \App\Enums\UserRole::SellerBuyer,
                 'email_verified_at' => now(),
                 'is_active' => true,
                 'profile_finished' => true,
@@ -68,7 +68,7 @@ class UserSeeder extends Seeder
                 'last_name' => 'Johnson',
                 'email' => 'seller@gmail.com',
                 'password' => Hash::make('password'),
-                'role' => \App\Enums\UserRole::Seller,
+                'role' => \App\Enums\UserRole::SellerBuyer,
                 'email_verified_at' => now(),
                 'is_active' => true,
                 'profile_finished' => true,
@@ -79,7 +79,7 @@ class UserSeeder extends Seeder
                 'last_name' => 'User',
                 'email' => 'buyer@example.com',
                 'password' => Hash::make('password'),
-                'role' => \App\Enums\UserRole::Buyer,
+                'role' => \App\Enums\UserRole::SellerBuyer,
                 'email_verified_at' => now(),
                 'is_active' => true,
                 'profile_finished' => true,
@@ -92,5 +92,7 @@ class UserSeeder extends Seeder
                 $data
             );
         }
+
+        $this->call(SellerBuyerUserSeeder::class);
     }
 }

@@ -2,7 +2,9 @@
 
 namespace App\Http\Requests;
 
+use App\Models\ListingProcess;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Validator;
 
 class SaveListingProcessRequest extends FormRequest
 {
@@ -22,6 +24,8 @@ class SaveListingProcessRequest extends FormRequest
             'assigned_zips' => 'nullable|array',
             'required_disclosures' => 'nullable|array',
             'required_disclosures.*' => 'string',
+            'documents' => 'nullable|array',
+            'documents.*' => 'string|exists:document_templates,code',
             'config' => 'nullable|array',
 
             // Step Validation
@@ -32,6 +36,12 @@ class SaveListingProcessRequest extends FormRequest
             'config.*.isSystem' => 'nullable|boolean',
             'config.*.visible' => 'nullable|boolean',
             'config.*.description' => 'nullable|string',
+            'config.*.disclosure_code' => 'nullable|string|max:100',
+            'config.*.customized' => 'nullable|boolean',
+            'config.*.locked' => 'nullable|boolean',
+            'config.*.kind' => 'nullable|string|max:50',
+            'config.*.showIf' => 'nullable|array',
+            'config.*.skipIf' => 'nullable|array',
             'config.*.sections' => 'nullable|array',
 
             // Section Validation
@@ -64,6 +74,42 @@ class SaveListingProcessRequest extends FormRequest
             'config.*.sections.*.fields.*.dependencies.*.parentFieldId' => 'required_with:config.*.sections.*.fields.*.dependencies|string',
             'config.*.sections.*.fields.*.dependencies.*.condition' => 'required_with:config.*.sections.*.fields.*.dependencies|string|in:equals,contains,checked',
             'config.*.sections.*.fields.*.dependencies.*.value' => 'nullable|string', // value can be empty sometimes, e.g. for checked
+        ];
+    }
+
+    public function after(): array
+    {
+        return [
+            function (Validator $validator) {
+                $config = $this->input('config');
+                if (! is_array($config)) {
+                    return;
+                }
+
+                foreach ($config as $sIndex => $step) {
+                    // Locked and legacy public-info steps are replaced by the server, so their fields are not checked
+                    $id = is_array($step) ? (string) ($step['id'] ?? '') : '';
+                    if ($id === '' || $id === ListingProcess::LEGACY_PUBLIC_STEP_ID || ListingProcess::isLockedStepId($id)) {
+                        continue;
+                    }
+
+                    $names = [];
+                    foreach ($step['sections'] ?? [] as $secIndex => $section) {
+                        foreach ($section['fields'] ?? [] as $fIndex => $field) {
+                            $name = $field['name'] ?? null;
+                            if (! is_string($name) || $name === '') {
+                                continue;
+                            }
+                            $key = "config.$sIndex.sections.$secIndex.fields.$fIndex.name";
+
+                            if (isset($names[$name])) {
+                                $validator->errors()->add($key, "The field name \"$name\" is used more than once in step \"".($step['name'] ?? '')."\".");
+                            }
+                            $names[$name] = true;
+                        }
+                    }
+                }
+            },
         ];
     }
 }

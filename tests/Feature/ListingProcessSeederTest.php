@@ -54,17 +54,12 @@ class ListingProcessSeederTest extends TestCase
 
         $residential = ListingProcess::where('name', 'Residential Property Listing Process')->first();
         $stepsRes = $residential->config;
+        // Same 9 steps as the original Reozom Michigan Residential wizard
         $this->assertCount(9, $stepsRes, 'Residential process must contain exactly 9 steps.');
-
-        // Step 1: System Step
-        $this->assertEquals('system_public_info', $stepsRes[0]['id']);
-        $this->assertEquals('public_listing', $stepsRes[0]['type']);
-        $this->assertTrue($stepsRes[0]['isSystem']);
+        $this->assertEquals('step_property_type_address', $stepsRes[0]['id']);
         $this->assertEquals(1, $stepsRes[0]['order']);
 
-        // Check sequential ordering of steps
         $expectedResSteps = [
-            'system_public_info',
             'step_property_type_address',
             'step_property_location',
             'step_property_information',
@@ -73,31 +68,34 @@ class ListingProcessSeederTest extends TestCase
             'step_disclosures_appliances',
             'step_disclosures_property',
             'step_images_virtual_tours',
+            'step_payment',
         ];
-        $actualResSteps = array_column($stepsRes, 'id');
-        $this->assertEquals($expectedResSteps, $actualResSteps);
+        $this->assertEquals($expectedResSteps, array_column($stepsRes, 'id'));
+        $this->assertEquals(range(1, 9), array_column($stepsRes, 'order'));
 
         $vacantLand = ListingProcess::where('name', 'Vacant Land Listing Process')->first();
         $stepsLand = $vacantLand->config;
         $this->assertCount(7, $stepsLand, 'Vacant Land process must contain exactly 7 steps.');
 
-        // Step 1: System Step
-        $this->assertEquals('system_public_info', $stepsLand[0]['id']);
-        $this->assertEquals('public_listing', $stepsLand[0]['type']);
-        $this->assertTrue($stepsLand[0]['isSystem']);
-        $this->assertEquals(1, $stepsLand[0]['order']);
-
         $expectedLandSteps = [
-            'system_public_info',
             'step_property_type_address',
             'step_property_location',
             'step_property_information',
             'step_improvements_features',
             'step_disclosures',
             'step_images_virtual_tours',
+            'step_payment',
         ];
-        $actualLandSteps = array_column($stepsLand, 'id');
-        $this->assertEquals($expectedLandSteps, $actualLandSteps);
+        $this->assertEquals($expectedLandSteps, array_column($stepsLand, 'id'));
+
+        foreach ([$stepsRes, $stepsLand] as $steps) {
+            $locked = array_column(array_filter($steps, fn ($s) => ! empty($s['locked'])), 'kind', 'id');
+            $this->assertSame([
+                'step_property_location' => 'map',
+                'step_images_virtual_tours' => 'media',
+                'step_payment' => 'payment',
+            ], $locked);
+        }
     }
 
     public function test_it_has_valid_field_dependencies_referencing_existing_fields()

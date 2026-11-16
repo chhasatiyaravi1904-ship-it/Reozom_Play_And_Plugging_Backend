@@ -18,6 +18,15 @@ class UpdateUserRequest extends FormRequest
         return true;
     }
 
+    protected function prepareForValidation(): void
+    {
+        if ($this->has('role')) {
+            $this->merge([
+                'role' => UserRole::fromValue($this->role)->value,
+            ]);
+        }
+    }
+
     /**
      * Get the validation rules that apply to the request.
      *

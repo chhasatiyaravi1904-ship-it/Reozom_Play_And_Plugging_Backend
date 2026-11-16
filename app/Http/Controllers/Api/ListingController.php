@@ -34,7 +34,20 @@ class ListingController extends Controller
                 ->latest()
                 ->get();
         } else {
-            $listings = $user->listings()->with(['images', 'offers', 'servicePackage', 'answers'])->latest()->get();
+            // A seller_buyer user acts as both seller and buyer:
+            // They see all market properties (published, under contract, sold) to browse and make offers on,
+            // as well as any properties they personally own (including in-progress setup and drafts).
+            if ($request->query('scope') === 'my') {
+                $listings = $user->listings()->with(['images', 'offers', 'servicePackage', 'answers'])->latest()->get();
+            } else {
+                $listings = Listing::with(['images', 'offers', 'servicePackage', 'answers'])
+                    ->where(function ($q) use ($user) {
+                        $q->where('user_id', $user->id)
+                          ->orWhereIn('status', ['published', 'under_contract', 'ccs', 'contingent_continue_to_show', 'sold']);
+                    })
+                    ->latest()
+                    ->get();
+            }
         }
 
         return api_success(ListingResource::collection($listings));
@@ -127,37 +140,29 @@ class ListingController extends Controller
 
         $newPrice = (float) $validated['price'];
 
-        $answer = ListingAnswer::firstOrNew([
-            'listing_id' => $listing->id,
-            'step_id' => 'system_public_info',
-        ]);
+        // Price lives in the Property Information step (list_price), as in the original Reozom
+        $oldPrice = $listing->publicValue('listing_price');
+        $listing->setPublicValue('listing_price', $newPrice);
 
-        $values = is_array($answer->values) ? $answer->values : [];
-        $oldPrice = $values['listing_price'] ?? $values['list_price'] ?? null;
-        $values['listing_price'] = $newPrice;
-        $values['list_price'] = $newPrice;
-        $answer->values = $values;
-        $answer->save();
+        if (!$oldPrice || (float)$oldPrice !== $newPrice) {
+            $actorRole = $request->user()->role instanceof \BackedEnum 
+                ? $request->user()->role->value 
+                : (string)($request->user()->role ?? 'user');
 
-        $infoAnswer = ListingAnswer::where('listing_id', $listing->id)
-            ->where('step_id', 'like', '%property_info%')
-            ->first();
-        if ($infoAnswer && is_array($infoAnswer->values)) {
-            $iv = $infoAnswer->values;
-            $iv['list_price'] = $newPrice;
-            $infoAnswer->values = $iv;
-            $infoAnswer->save();
-        }
-
-        if ($oldPrice && (float)$oldPrice !== $newPrice) {
             $listing->statusHistories()->create([
-                'status' => $listing->status,
-                'comment' => sprintf('Price updated from $%s to $%s%s', 
-                    number_format((float)$oldPrice, 2), 
-                    number_format($newPrice, 2), 
-                    !empty($validated['reason']) ? " ({$validated['reason']})" : ''
-                ),
-                'changed_by' => $request->user()->id,
+                'from_status' => $listing->status,
+                'to_status' => $listing->status,
+                'actor_id' => $request->user()->id,
+                'actor_role' => $actorRole,
+                'comment' => $oldPrice 
+                    ? sprintf('Price updated from $%s to $%s%s', number_format((float)$oldPrice, 2), number_format($newPrice, 2), !empty($validated['reason']) ? " ({$validated['reason']})" : '')
+                    : sprintf('Price set to $%s%s', number_format($newPrice, 2), !empty($validated['reason']) ? " ({$validated['reason']})" : ''),
+                'metadata' => [
+                    'event' => 'price_update',
+                    'old_price' => $oldPrice ? (float)$oldPrice : null,
+                    'new_price' => $newPrice,
+                    'reason' => $validated['reason'] ?? null,
+                ],
             ]);
         }
 
@@ -181,23 +186,11 @@ class ListingController extends Controller
             'directions' => 'nullable|string|max:1000',
         ]);
 
-        $answer = ListingAnswer::firstOrNew([
-            'listing_id' => $listing->id,
-            'step_id' => 'system_public_info',
-        ]);
-
-        $values = is_array($answer->values) ? $answer->values : [];
-        if (array_key_exists('listing_title', $validated)) {
-            $values['listing_title'] = $validated['listing_title'];
+        foreach (['listing_title', 'remarks', 'directions'] as $key) {
+            if (array_key_exists($key, $validated)) {
+                $listing->setPublicValue($key, $validated[$key]);
+            }
         }
-        if (array_key_exists('remarks', $validated)) {
-            $values['remarks'] = $validated['remarks'];
-        }
-        if (array_key_exists('directions', $validated)) {
-            $values['directions'] = $validated['directions'];
-        }
-        $answer->values = $values;
-        $answer->save();
 
         $listing->touch();
         $listing->loadMissing(['images', 'offers', 'servicePackage', 'answers']);
@@ -220,17 +213,9 @@ class ListingController extends Controller
             'seller_concessions' => 'nullable|numeric|min:0',
         ]);
 
-        $answer = ListingAnswer::firstOrNew([
-            'listing_id' => $listing->id,
-            'step_id' => 'system_public_info',
-        ]);
-
-        $values = is_array($answer->values) ? $answer->values : [];
-        foreach ($validated as $k => $v) {
-            $values[$k] = $v;
+        foreach ($validated as $field => $value) {
+            $listing->setPublicValue($field, $value);
         }
-        $answer->values = $values;
-        $answer->save();
 
         $listing->touch();
         $listing->loadMissing(['images', 'offers', 'servicePackage', 'answers']);

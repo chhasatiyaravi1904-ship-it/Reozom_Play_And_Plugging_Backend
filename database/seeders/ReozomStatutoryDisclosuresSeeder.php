@@ -883,6 +883,8 @@ class ReozomStatutoryDisclosuresSeeder extends Seeder
                 'is_active' => true,
                 'description' => "Statutory Florida Association of Realtors disclosure covering claims, HOA deed restrictions, sinkholes, flood hazard zones, termites, roof, pool safety, and mechanical systems.",
                 'schema' => [
+                    // Original Reozom shows this form only for Single Family (property_sub_type = 1)
+                    'step_show_if' => ['field' => 'property_sub_type', 'equals' => '1'],
                     'sections' => [
                         [
                             'id' => 'fl_claims_restrictions',
@@ -929,6 +931,18 @@ class ReozomStatutoryDisclosuresSeeder extends Seeder
                                         ['label' => 'No', 'value' => 'no'],
                                         ['label' => 'Yes', 'value' => 'yes'],
                                         ['label' => 'Unknown', 'value' => 'unknown'],
+                                    ],
+                                ],
+                                [
+                                    // Same key as the original Reozom (field_11): "Yes" adds the HOA Disclosure document
+                                    'id' => 'field_11',
+                                    'name' => 'field_11',
+                                    'label' => "Is membership in a homeowners' association mandatory?",
+                                    'type' => 'select',
+                                    'required' => true,
+                                    'options' => [
+                                        ['label' => 'No', 'value' => 'no'],
+                                        ['label' => 'Yes', 'value' => 'yes'],
                                     ],
                                 ],
                                 [
@@ -1128,6 +1142,8 @@ class ReozomStatutoryDisclosuresSeeder extends Seeder
                 'is_active' => true,
                 'description' => "Statutory Florida Condominium disclosure covering HOA fees, reserve studies, Florida SB 4-D Milestone structural inspections, and unit rules.",
                 'schema' => [
+                    // Original Reozom shows this form only for Condominiums (property_sub_type = 2)
+                    'step_show_if' => ['field' => 'property_sub_type', 'equals' => '2'],
                     'sections' => [
                         [
                             'id' => 'condo_association_governance',

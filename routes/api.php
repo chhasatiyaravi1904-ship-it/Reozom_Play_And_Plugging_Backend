@@ -72,6 +72,9 @@ Route::prefix('auth')->group(function () {
             Route::post('logout', 'logout')->name('auth.logout');
             Route::get('me', 'me')->name('auth.me');
         });
+
+        Route::post('stop-impersonation', [\App\Http\Controllers\Api\Admin\ImpersonationController::class, 'stop'])
+            ->name('auth.stop-impersonation');
         
         Route::put('profile', [\App\Http\Controllers\Api\ProfileController::class, 'update'])->name('profile.update');
         
@@ -118,6 +121,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('{listing}/disclosures/select', 'select')->name('listings.disclosures.select');
     });
 
+    // Manage Documents: all documents the user can access, across listings
+    Route::get('documents', [\App\Http\Controllers\Api\ManageDocumentsController::class, 'index'])->name('documents.index');
+
     Route::controller(\App\Http\Controllers\Api\ListingDocumentController::class)->prefix('listings')->group(function () {
         Route::get('{listing}/documents', 'index')->name('listings.documents.index');
         Route::post('{listing}/documents', 'store')->name('listings.documents.store');
@@ -130,6 +136,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('{listing}/documents/sign-all', 'signAll')->name('listings.documents.sign-all');
         Route::post('{listing}/documents/{document}/sign', 'sign')->name('listings.documents.sign');
         Route::put('{listing}/documents/{document}/review', 'review')->name('listings.documents.review');
+        Route::post('{listing}/documents/{document}/regenerate', 'regenerate')->name('listings.documents.regenerate');
         Route::get('{listing}/documents-download-all', 'downloadAll')->name('listings.documents.download-all');
     });
 
@@ -161,8 +168,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::controller(\App\Http\Controllers\ListingProcessController::class)->prefix('listing-processes')->group(function () {
         Route::get('/', 'index')->name('listing-processes.index');
         Route::get('available-disclosures', 'availableDisclosures')->name('listing-processes.available-disclosures');
+        Route::get('document-templates', 'documentTemplates')->name('listing-processes.document-templates');
         Route::get('{listingProcess}', 'show')->name('listing-processes.show');
         Route::post('/', 'store')->name('listing-processes.store');
+        Route::post('{listingProcess}/copy', 'copy')->name('listing-processes.copy');
+        Route::post('{listingProcess}/disclosure-steps/{code}/reset', 'resetDisclosureStep')->name('listing-processes.disclosure-steps.reset');
         Route::put('{listingProcess}', 'update')->name('listing-processes.update');
         Route::delete('{listingProcess}', 'destroy')->name('listing-processes.destroy');
     });
@@ -244,6 +254,9 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('{user}', 'show')->name('users.show');
 
             Route::middleware('permission:manage-users')->group(function () {
+                // "Login as user" (original Reozom: temporary login from the administration)
+                Route::post('{user}/impersonate', [\App\Http\Controllers\Api\Admin\ImpersonationController::class, 'start'])
+                    ->name('users.impersonate');
                 Route::post('/', 'store')->name('users.store');
                 Route::put('{user}', 'update')->name('users.update');
                 Route::delete('{user}', 'destroy')->name('users.destroy');

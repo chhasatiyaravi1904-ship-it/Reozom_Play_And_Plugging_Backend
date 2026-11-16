@@ -14,6 +14,8 @@ class ListingDocument extends Model
         'listing_id',
         'user_id',
         'type',
+        'document_template_id',
+        'content',
         'original_name',
         'path',
         'mime_type',
@@ -39,6 +41,14 @@ class ListingDocument extends Model
             'signed_at' => 'datetime',
             'audit_trail' => 'array',
         ];
+    }
+
+    /** Rendered HTML can be large; it is served through the preview/view endpoints instead. */
+    protected $hidden = ['content'];
+
+    public function template(): BelongsTo
+    {
+        return $this->belongsTo(DocumentTemplate::class, 'document_template_id');
     }
 
     public function listing(): BelongsTo

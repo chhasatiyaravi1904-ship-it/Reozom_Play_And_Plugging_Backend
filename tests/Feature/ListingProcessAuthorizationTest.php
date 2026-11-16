@@ -21,8 +21,8 @@ class ListingProcessAuthorizationTest extends TestCase
         $this->admin = User::factory()->create(['role' => UserRole::Admin]);
         $this->agent1 = User::factory()->create(['role' => UserRole::Agent]);
         $this->agent2 = User::factory()->create(['role' => UserRole::Agent]);
-        $this->seller = User::factory()->create(['role' => UserRole::Seller]);
-        $this->buyer = User::factory()->create(['role' => UserRole::Buyer]);
+        $this->seller = User::factory()->create(['role' => UserRole::SellerBuyer]);
+        $this->buyer = User::factory()->create(['role' => UserRole::SellerBuyer]);
 
         $package = Package::factory()->create(['max_listing_processes' => 10]);
         AgentPackage::factory()->create(['user_id' => $this->agent1->id, 'package_id' => $package->id]);

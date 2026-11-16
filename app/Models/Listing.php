@@ -188,54 +188,262 @@ class Listing extends Model
         return $this->hasOne(ListingSoldDetails::class);
     }
 
-    public function getPublicListingData(): array
+    /** Answer bucket for values that have no field in the listing steps (e.g. an edited listing title). */
+    public const PUBLIC_OVERRIDES_STEP_ID = 'public_overrides';
+
+    /**
+     * Public card values come from the regular listing steps, like the original Reozom.
+     * The first source field with a value wins.
+     */
+    public const PUBLIC_FIELD_SOURCES = [
+        'listing_price' => ['list_price', 'listing_price'],
+        'bedrooms' => ['total_bedrooms', 'bedrooms'],
+        'bathrooms' => ['total_bathrooms', 'bathrooms'],
+        'square_feet' => ['ag_square_footage', 'square_feet'],
+        'acreage' => ['acreage'],
+        'year_built' => ['year_built'],
+        'remarks' => ['remarks'],
+        'directions' => ['directions'],
+    ];
+
+    private const PROPERTY_TYPE_LABELS = [
+        'single_family' => 'Single Family Home',
+        'condo' => 'Condominium',
+        'townhouse' => 'Townhouse',
+        'multi_family' => 'Multi-Family',
+        'vacant_land' => 'Vacant Land',
+    ];
+
+    /**
+     * All answers as one flat field => value map (the listing wizard saves fields by name).
+     */
+    public function answerValues(): array
     {
-        $systemStepId = 'system_public_info';
-        
-        $answer = $this->answers->where('step_id', $systemStepId)->first();
-        $values = $answer ? ($answer->values ?? []) : [];
-        
-        $snapshot = $this->workflow_snapshot ?? [];
-        $publicStep = null;
-        
-        foreach ($snapshot as $step) {
-            if (($step['id'] ?? '') === $systemStepId) {
-                $publicStep = $step;
+        $values = [];
+        foreach ($this->answers as $answer) {
+            if (is_array($answer->values)) {
+                foreach ($answer->values as $field => $value) {
+                    if (! array_key_exists($field, $values) || ! self::hasValue($values[$field])) {
+                        $values[$field] = $value;
+                    }
+                }
+            }
+        }
+
+        // The owner step's value wins when the same field was saved in several steps
+        foreach ($this->answers as $answer) {
+            foreach ((array) $answer->values as $field => $value) {
+                if (self::hasValue($value) && $this->stepIdForField($field) === $answer->step_id) {
+                    $values[$field] = $value;
+                }
+            }
+        }
+
+        return $values;
+    }
+
+    /**
+     * Listings created from a process with disclosure steps (Phase 2 flow) instead of the old Disclosures page.
+     */
+    public function usesDisclosureSteps(): bool
+    {
+        return ListingProcess::disclosureCodesFromConfig($this->workflow_snapshot ?? []) !== [];
+    }
+
+    /**
+     * Steps that apply to this listing (showIf matches, skipIf does not), e.g. the Condo
+     * disclosure only for condos, no disclosures for trust-owned non-owner-occupied properties.
+     */
+    public function activeSteps(?array $values = null): array
+    {
+        $values ??= $this->answerValues();
+
+        return array_values(array_filter(
+            $this->workflow_snapshot ?? [],
+            fn ($step) => is_array($step) && ListingProcess::stepIsActive($step, $values)
+        ));
+    }
+
+    /**
+     * The step (in this listing's workflow snapshot) that holds a field.
+     */
+    public function stepIdForField(string $field): ?string
+    {
+        foreach ($this->workflow_snapshot ?? [] as $step) {
+            foreach ($step['sections'] ?? [] as $section) {
+                foreach ($section['fields'] ?? [] as $f) {
+                    if (($f['name'] ?? null) === $field || ($f['id'] ?? null) === $field) {
+                        return $step['id'] ?? null;
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * A field's answer: from the step that owns the field, otherwise from any saved step.
+     */
+    public function answerValue(string $field): mixed
+    {
+        $answers = $this->answers;
+
+        $ownerStep = $this->stepIdForField($field);
+        if ($ownerStep) {
+            $values = $answers->firstWhere('step_id', $ownerStep)?->values ?? [];
+            if (self::hasValue($values[$field] ?? null)) {
+                return $values[$field];
+            }
+        }
+
+        foreach ($answers as $answer) {
+            $value = $answer->values[$field] ?? null;
+            if (is_array($answer->values) && self::hasValue($value)) {
+                return $value;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Save a value into the step that owns the field (used by the quick-edit actions).
+     * Fields that no step owns go into the public overrides bucket.
+     */
+    public function setAnswerValue(string $field, mixed $value): void
+    {
+        $stepId = $this->stepIdForField($field) ?? self::PUBLIC_OVERRIDES_STEP_ID;
+
+        $answer = ListingAnswer::firstOrNew(['listing_id' => $this->id, 'step_id' => $stepId]);
+        $values = is_array($answer->values) ? $answer->values : [];
+        $values[$field] = $value;
+        $answer->values = $values;
+        $answer->save();
+
+        $this->unsetRelation('answers');
+    }
+
+    /**
+     * One public value: edited override, then the old "Public Listing Information" step
+     * (listings created before it was removed), then the regular listing steps.
+     */
+    public function publicValue(string $key): mixed
+    {
+        foreach ([self::PUBLIC_OVERRIDES_STEP_ID, ListingProcess::LEGACY_PUBLIC_STEP_ID] as $stepId) {
+            $values = $this->answers->firstWhere('step_id', $stepId)?->values ?? [];
+            if (self::hasValue($values[$key] ?? null)) {
+                return $values[$key];
+            }
+        }
+
+        foreach (self::PUBLIC_FIELD_SOURCES[$key] ?? [$key] as $field) {
+            $value = $this->answerValue($field);
+            if (self::hasValue($value)) {
+                return $value;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Quick edit of a public value (price, remarks, title...): updates the step field that holds it.
+     * Listings created with the old "Public Listing Information" step get that answer updated too,
+     * because it is read first for them.
+     */
+    public function setPublicValue(string $key, mixed $value): void
+    {
+        $legacy = ListingAnswer::where('listing_id', $this->id)
+            ->where('step_id', ListingProcess::LEGACY_PUBLIC_STEP_ID)->first();
+        if ($legacy && is_array($legacy->values) && array_key_exists($key, $legacy->values)) {
+            $values = $legacy->values;
+            $values[$key] = $value;
+            $legacy->values = $values;
+            $legacy->save();
+        }
+
+        $target = null;
+        foreach (self::PUBLIC_FIELD_SOURCES[$key] ?? [] as $field) {
+            if ($this->stepIdForField($field) !== null) {
+                $target = $field;
                 break;
             }
         }
-        
-        if (!$publicStep) {
-            return [
-                'step_id' => $systemStepId,
-                'fields' => []
-            ];
+
+        // No step holds this value (e.g. the title): keep it as an override
+        $this->setAnswerValue($target ?? $key, $value);
+    }
+
+    /**
+     * single_family, condo, vacant_land, ... derived from the listing steps.
+     */
+    public function publicPropertyType(): ?string
+    {
+        $legacy = $this->answers->firstWhere('step_id', ListingProcess::LEGACY_PUBLIC_STEP_ID)?->values['property_type'] ?? null;
+        if (self::hasValue($legacy)) {
+            return (string) $legacy;
         }
-        
-        $fieldsData = [];
-        
-        foreach ($publicStep['sections'] ?? [] as $section) {
-            foreach ($section['fields'] ?? [] as $field) {
-                $fieldId = $field['id'] ?? null;
-                if (!$fieldId) {
-                    continue;
-                }
-                
-                $fieldsData[] = [
-                    'id' => $fieldId,
-                    'label' => $field['label'] ?? $field['name'] ?? '',
-                    'type' => $field['type'] ?? 'text',
-                    'value' => array_key_exists($fieldId, $values) ? $values[$fieldId] : null,
-                    'public_display' => $field['public_display'] ?? true,
-                    'show_on_card' => $field['show_on_card'] ?? true,
-                    'show_on_detail' => $field['show_on_detail'] ?? true,
-                ];
+
+        if ($this->stepIdForField('property_sub_type') === null && $this->stepIdForField('acreage') !== null
+            && $this->stepIdForField('total_bedrooms') === null) {
+            return 'vacant_land';
+        }
+
+        return match ((string) $this->answerValue('property_sub_type')) {
+            '1' => 'single_family',
+            '2' => 'condo',
+            default => null,
+        };
+    }
+
+    /**
+     * The original Reozom shows the address as the listing title; e.g. "Single Family Home – 742 Evergreen Terrace, Ann Arbor".
+     */
+    public function publicTitle(): ?string
+    {
+        $title = $this->publicValue('listing_title');
+        if (self::hasValue($title)) {
+            return (string) $title;
+        }
+
+        $address = trim(implode(', ', array_filter([$this->address, $this->city])));
+        $type = self::PROPERTY_TYPE_LABELS[$this->publicPropertyType() ?? ''] ?? null;
+
+        $generated = trim(implode(' – ', array_filter([$type, $address])));
+
+        return $generated !== '' ? $generated : null;
+    }
+
+    public function getPublicListingData(): array
+    {
+        $propertyType = $this->publicPropertyType();
+
+        $fields = [
+            ['id' => 'listing_title', 'label' => 'Title', 'type' => 'text', 'value' => $this->publicTitle()],
+            ['id' => 'listing_price', 'label' => 'Price', 'type' => 'number', 'value' => $this->publicValue('listing_price')],
+            ['id' => 'property_type', 'label' => 'Property Type', 'type' => 'text', 'value' => self::PROPERTY_TYPE_LABELS[$propertyType ?? ''] ?? $propertyType],
+        ];
+
+        $details = $propertyType === 'vacant_land'
+            ? ['acreage' => ['Acreage', 'number']]
+            : ['bedrooms' => ['Bedrooms', 'number'], 'bathrooms' => ['Bathrooms', 'number'], 'square_feet' => ['Square Feet', 'number'], 'year_built' => ['Year Built', 'text']];
+
+        foreach ($details as $key => [$label, $type]) {
+            $value = $this->publicValue($key);
+            if (self::hasValue($value)) {
+                $fields[] = ['id' => $key, 'label' => $label, 'type' => $type, 'value' => $value];
             }
         }
-        
+
         return [
-            'step_id' => $systemStepId,
-            'fields' => $fieldsData,
+            'step_id' => null,
+            'fields' => array_map(fn ($f) => $f + ['public_display' => true, 'show_on_card' => true, 'show_on_detail' => true], $fields),
         ];
+    }
+
+    private static function hasValue(mixed $value): bool
+    {
+        return $value !== null && $value !== '' && $value !== [];
     }
 }

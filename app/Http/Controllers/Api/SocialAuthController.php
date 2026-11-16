@@ -65,7 +65,7 @@ class SocialAuthController extends Controller
                 'name' => $socialUser->getName() ?: $socialUser->getNickname() ?: 'Reozom User',
                 'email' => $socialUser->getEmail(),
                 'password' => Hash::make(Str::random(32)),
-                'role' => UserRole::Seller,
+                'role' => UserRole::SellerBuyer,
                 'profile_finished' => false,
                 // Social providers already confirm the email address.
                 'email_verified_at' => now(),

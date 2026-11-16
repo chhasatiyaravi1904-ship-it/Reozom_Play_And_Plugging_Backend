@@ -44,14 +44,7 @@ class PropertyDisclosure extends Model
     {
         $listingState = method_exists($listing, 'getStateCode') ? $listing->getStateCode() : strtoupper($listing->state ?? '');
 
-        $rawType = null;
-        if ($listing->relationLoaded('answers')) {
-            $ans = $listing->answers->firstWhere('step_id', 'system_public_info');
-            $rawType = $ans ? ($ans->values['property_type'] ?? null) : null;
-        } else {
-            $ans = $listing->answers()->where('step_id', 'system_public_info')->first();
-            $rawType = $ans ? ($ans->values['property_type'] ?? null) : null;
-        }
+        $rawType = $listing->publicPropertyType();
 
         $propertyType = strtolower($rawType ?? 'residential');
         $types = [$propertyType, 'all'];

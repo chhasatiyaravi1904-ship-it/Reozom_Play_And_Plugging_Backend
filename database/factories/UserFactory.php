@@ -31,7 +31,7 @@ class UserFactory extends Factory
             'email_verified_at' => now(),
             'password' => static::$password ??= Hash::make('password'),
             'remember_token' => Str::random(10),
-            'role' => UserRole::Buyer,
+            'role' => UserRole::SellerBuyer,
         ];
     }
 
@@ -66,22 +66,33 @@ class UserFactory extends Factory
     }
 
     /**
-     * Indicate that the user is a seller.
+     * Indicate that the user is a seller / buyer.
      */
-    public function seller(): static
+    public function sellerBuyer(): static
     {
         return $this->state(fn (array $attributes) => [
-            'role' => UserRole::Seller,
+            'role' => UserRole::SellerBuyer,
         ]);
     }
 
-    /**
-     * Indicate that the user is a buyer.
-     */
+    public function client(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'role' => UserRole::SellerBuyer,
+        ]);
+    }
+
+    public function seller(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'role' => UserRole::SellerBuyer,
+        ]);
+    }
+
     public function buyer(): static
     {
         return $this->state(fn (array $attributes) => [
-            'role' => UserRole::Buyer,
+            'role' => UserRole::SellerBuyer,
         ]);
     }
 }

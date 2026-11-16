@@ -64,7 +64,13 @@ class ListingWorkflowController extends Controller
             $listing->update($updates);
         }
 
+        $listing->unsetRelation('answers');
         $workflowService->calculateCompletedSteps($listing);
+
+        // Answers drive which documents apply (Single Family vs Condo, HOA, year built, trust...)
+        if ($listing->usesDisclosureSteps()) {
+            app(\App\Services\DisclosureService::class)->generateListingDocuments($listing);
+        }
 
         // Approved Rule: Editing a published listing unpublishes it until revalidated and resubmitted
         if ($listing->status === 'published') {
