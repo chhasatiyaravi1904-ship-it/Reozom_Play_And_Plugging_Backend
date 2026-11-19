@@ -64,7 +64,7 @@ class EunoSignController extends Controller
         // files so a later view/download never serves this copy by mistake.
         $sourcePaths = [];
         foreach ($documents as $doc) {
-            $relPath = "listings/{$listing->id}/euno-source/{$doc->type}.pdf";
+            $relPath = "listings/{$listing->id}/unsigned/{$doc->type}.pdf";
             Storage::disk('local')->put($relPath, $docController->renderPdf($listing, $doc));
             $sourcePaths[$doc->id] = $relPath;
         }
@@ -105,6 +105,66 @@ class EunoSignController extends Controller
         ]);
 
         return api_success($this->agreementPayload($agreement), 'EunoDoc signature agreement created successfully.');
+    }
+
+    /**
+     * Listing-document agreements still waiting to be signed where the current user is a
+     * signer, each with that user's own signing link (shown as a pop-up after login).
+     */
+    public function pendingSignatures(Request $request): JsonResponse
+    {
+        $email = strtolower((string) $request->user()->email);
+        $like = '%'.addcslashes($email, '\\%_').'%';
+
+        $items = ListingEunoAgreement::query()
+            ->whereNull('listing_offer_id')
+            ->where('status', 'inprogress')
+            ->whereNotNull('agreement_id')
+            // Cheap pre-filter; the exact email match is checked below.
+            ->where('signers', 'like', $like)
+            ->with('listing:id,address,city,state,zip')
+            ->latest()
+            ->limit(20)
+            ->get()
+            ->map(function (ListingEunoAgreement $agreement) use ($email, $request) {
+                $signer = collect($agreement->signers ?? [])
+                    ->first(fn ($s) => strtolower((string) ($s['email'] ?? '')) === $email);
+                if (! $signer || ! $agreement->listing) {
+                    return null;
+                }
+
+                // Each signer gets their own EunoDoc link, built from their recipient id.
+                if (! empty($signer['recipient_id'])) {
+                    $url = $this->eunoService->getSigningUrlForUser(
+                        $agreement->agreement_id,
+                        $email,
+                        [['email' => $email, '_id' => $signer['recipient_id']]]
+                    );
+                } elseif ($agreement->initiated_by_user_id === $request->user()->id) {
+                    $url = $agreement->signing_url;
+                } else {
+                    $url = null;
+                }
+                if (! $url) {
+                    return null;
+                }
+
+                $listing = $agreement->listing;
+
+                return [
+                    'agreement_id' => $agreement->id,
+                    'listing_id' => $listing->id,
+                    'listing_address' => trim(implode(', ', array_filter([$listing->address, $listing->city, trim("{$listing->state} {$listing->zip}")]))),
+                    'document_name' => $agreement->document_name,
+                    'document_count' => count($agreement->source_file_paths ?? []),
+                    'sent_at' => $agreement->sent_at,
+                    'signing_url' => $url,
+                ];
+            })
+            ->filter()
+            ->values();
+
+        return api_success(['items' => $items, 'count' => $items->count()]);
     }
 
     /**
@@ -404,10 +464,30 @@ class EunoSignController extends Controller
     }
 
     /**
+     * Signed documents are private: admins, the listing's owner, the listing's
+     * agent, and (for an offer agreement) the offer's buyer.
+     */
+    private function authorizeAgreementDownload(Request $request, ListingEunoAgreement $agreement): void
+    {
+        $user = $request->user();
+        $listing = $agreement->listing;
+        $offer = $agreement->listingOffer;
+
+        $allowed = $user->isAdmin()
+            || ($listing && $listing->user_id === $user->id)
+            || ($listing && $user->isAgent() && $listing->servicePackage?->agent_id === $user->id)
+            || ($offer && $offer->buyer_id === $user->id);
+
+        abort_unless($allowed, 403, 'You are not allowed to download this document.');
+    }
+
+    /**
      * Download or view the signed PDF.
      */
-    public function downloadSignedDocument(ListingEunoAgreement $agreement): Response
+    public function downloadSignedDocument(Request $request, ListingEunoAgreement $agreement): Response
     {
+        $this->authorizeAgreementDownload($request, $agreement);
+
         if ((!$agreement->signed_file_path || !Storage::disk('local')->exists($agreement->signed_file_path)) && $agreement->agreement_id) {
             $signedPdf = $this->eunoService->getSignedDocument($agreement->agreement_id);
             if ($signedPdf) {
@@ -431,8 +511,10 @@ class EunoSignController extends Controller
     /**
      * Download or view the audit report PDF.
      */
-    public function downloadAuditReport(ListingEunoAgreement $agreement): Response
+    public function downloadAuditReport(Request $request, ListingEunoAgreement $agreement): Response
     {
+        $this->authorizeAgreementDownload($request, $agreement);
+
         if ((!$agreement->audit_file_path || !Storage::disk('local')->exists($agreement->audit_file_path)) && $agreement->agreement_id) {
             $auditPdf = $this->eunoService->getAuditReport($agreement->agreement_id);
             if ($auditPdf) {

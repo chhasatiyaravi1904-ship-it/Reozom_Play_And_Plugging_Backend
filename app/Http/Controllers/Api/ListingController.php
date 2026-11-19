@@ -245,6 +245,10 @@ class ListingController extends Controller
     {
         Gate::authorize('submit', $listing);
 
+        if ($unpaid = $this->denyUnpaidListing($listing)) {
+            return $unpaid;
+        }
+
         $snapshot = $listing->workflow_snapshot ?? [];
         $stepsTotal = count($snapshot) > 0 ? count($snapshot) : $listing->steps_total;
 
@@ -264,6 +268,10 @@ class ListingController extends Controller
     {
         Gate::authorize('update', $listing);
 
+        if ($unpaid = $this->denyUnpaidListing($listing)) {
+            return $unpaid;
+        }
+
         $snapshot = $listing->workflow_snapshot ?? [];
         $stepsTotal = count($snapshot) > 0 ? count($snapshot) : $listing->steps_total;
 
@@ -276,6 +284,18 @@ class ListingController extends Controller
         ]);
 
         return api_success(new ListingResource($listing), 'Listing published successfully.');
+    }
+
+    /**
+     * A listing on a paid service package can't be published until the seller has paid.
+     */
+    private function denyUnpaidListing(Listing $listing): ?JsonResponse
+    {
+        if (app(\App\Services\PaymentService::class)->listingIsPaid($listing)) {
+            return null;
+        }
+
+        return api_error('Please complete the payment for your service package before publishing.', 402);
     }
 }
 

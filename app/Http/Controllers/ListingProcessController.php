@@ -319,14 +319,12 @@ class ListingProcessController extends Controller
             $validated['required_disclosures'] ?? []
         ));
 
-        if (($validated['type'] ?? null) === 'default') {
-            $query = ListingProcess::where('type', 'default');
-            if ($user->isAgent()) {
-                $query->where('agent_id', $user->id);
-            } else {
-                $query->whereNull('agent_id');
-            }
-            $query->update(['type' => 'custom']);
+        // An agent has one default process. System Defaults (admin) are many
+        // by design (one per state/property type), so they are never demoted.
+        if (($validated['type'] ?? null) === 'default' && $user->isAgent()) {
+            ListingProcess::where('type', 'default')
+                ->where('agent_id', $user->id)
+                ->update(['type' => 'custom']);
         }
 
         $process = \Illuminate\Support\Facades\DB::transaction(function () use ($validated, $packageIds) {
@@ -398,14 +396,12 @@ class ListingProcessController extends Controller
 
         $this->applyConfigAndDisclosures($request, $validated, $listingProcess);
 
-        if (($validated['type'] ?? null) === 'default' && $listingProcess->type !== 'default') {
-            $query = ListingProcess::where('type', 'default');
-            if ($request->user()->isAgent()) {
-                $query->where('agent_id', $request->user()->id);
-            } else {
-                $query->whereNull('agent_id');
-            }
-            $query->update(['type' => 'custom']);
+        // See store(): only an agent's own previous default is demoted.
+        if (($validated['type'] ?? null) === 'default' && $listingProcess->type !== 'default'
+            && $request->user()->isAgent()) {
+            ListingProcess::where('type', 'default')
+                ->where('agent_id', $request->user()->id)
+                ->update(['type' => 'custom']);
         }
 
         \Illuminate\Support\Facades\DB::transaction(function () use ($validated, $listingProcess, $hasPackages, $packageIds) {

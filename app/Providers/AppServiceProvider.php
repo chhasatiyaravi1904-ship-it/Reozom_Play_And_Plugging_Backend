@@ -13,7 +13,24 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        // Every request runs in a DB transaction that is rolled back on error
+        // responses (DatabaseTransaction middleware). With the database cache
+        // store on that same connection, rate-limit counters for failed
+        // requests (login lockout, 2FA attempts, route throttles) were rolled
+        // back too. A separate connection to the same database keeps cache
+        // writes outside that transaction.
+        $default = config('database.default');
+        $base = config("database.connections.{$default}");
+        if (is_array($base) && ! config('database.connections.cache')
+            && ($base['database'] ?? null) !== ':memory:') {
+            config(['database.connections.cache' => $base]);
+            if (! config('cache.stores.database.connection')) {
+                config(['cache.stores.database.connection' => 'cache']);
+            }
+            if (! config('cache.stores.database.lock_connection')) {
+                config(['cache.stores.database.lock_connection' => 'cache']);
+            }
+        }
     }
 
     /**

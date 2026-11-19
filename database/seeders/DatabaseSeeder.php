@@ -18,6 +18,7 @@ class DatabaseSeeder extends Seeder
         $this->call(SellerBuyerUserSeeder::class);
         $this->call(PermissionSeeder::class);
         $this->call(PackageSeeder::class);
+        $this->call(AgentUserSeeder::class);
         $this->call(MlsSeeder::class);
         $this->call(StateSeeder::class);
         $this->call(CountySeeder::class);

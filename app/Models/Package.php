@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\SyncsToStripe;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -10,7 +11,12 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Package extends Model
 {
-    use HasFactory, HasUuids;
+    use HasFactory, HasUuids, SyncsToStripe;
+
+    public function stripePlanType(): string
+    {
+        return 'agent_package';
+    }
 
     protected $fillable = [
         'name',

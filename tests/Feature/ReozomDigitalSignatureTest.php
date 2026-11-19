@@ -189,7 +189,7 @@ class ReozomDigitalSignatureTest extends TestCase
 
         foreach ($agreement->source_file_paths as $path) {
             Storage::disk('local')->assertExists($path);
-            $this->assertStringContainsString('/euno-source/', $path);
+            $this->assertStringStartsWith("listings/{$this->listing->id}/unsigned/", $path);
         }
     }
 

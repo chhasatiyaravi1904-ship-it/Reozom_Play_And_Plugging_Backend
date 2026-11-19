@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Hash;
 class SellerBuyerUserSeeder extends Seeder
 {
     /**
-     * Run the database seeds to generate 5 Seller / Buyer users.
+     * Run the database seeds to generate 10 Seller / Buyer users.
      */
     public function run(): void
     {
@@ -96,6 +96,33 @@ class SellerBuyerUserSeeder extends Seeder
                 'profile_finished' => true,
             ],
         ];
+
+        // Five more Seller / Buyer users (same defaults as above).
+        $more = [
+            ['James', 'Wilson', '(313) 555-0166', '2700 Woodward Ave', 'Detroit', '48201'],
+            ['Olivia', 'Martinez', '(517) 555-0177', '410 East Grand River Ave', 'East Lansing', '48823'],
+            ['William', 'Brown', '(248) 555-0188', '120 East Maple Rd', 'Birmingham', '48009'],
+            ['Sophia', 'Patel', '(734) 555-0199', '33 East Michigan Ave', 'Ypsilanti', '48197'],
+            ['Daniel', 'Kim', '(269) 555-0110', '215 West Michigan Ave', 'Kalamazoo', '49007'],
+        ];
+        foreach ($more as [$first, $last, $phone, $street, $city, $zip]) {
+            $sellerBuyers[] = [
+                'name' => "{$first} {$last}",
+                'first_name' => $first,
+                'last_name' => $last,
+                'email' => strtolower("{$first}.{$last}").'@example.com',
+                'phone' => $phone,
+                'street_address' => $street,
+                'city' => $city,
+                'state' => 'MI',
+                'zip' => $zip,
+                'password' => Hash::make('password'),
+                'role' => UserRole::SellerBuyer,
+                'email_verified_at' => now(),
+                'is_active' => true,
+                'profile_finished' => true,
+            ];
+        }
 
         foreach ($sellerBuyers as $data) {
             User::updateOrCreate(

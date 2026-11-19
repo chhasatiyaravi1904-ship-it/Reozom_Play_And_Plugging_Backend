@@ -34,7 +34,7 @@ class PackageAvailabilityService
         }
 
         // We use whereHas to ensure the package is linked to this specific zip code
-        return ServicePackage::with(['agent:id,first_name,last_name,email'])
+        return ServicePackage::with(['agent:id,first_name,last_name'])
             ->where('is_active', true)
             ->whereHas('zipCodes', function ($query) use ($zip) {
                 $query->where('code', $zip);
@@ -47,6 +47,42 @@ class PackageAvailabilityService
                       });
             })
             ->get();
+    }
+
+    /**
+     * Paginated packages for the public ZIP matching engine.
+     *
+     * With a ZIP prefix, only packages serving an active ZIP that starts with
+     * it are returned; without one, the newest available packages are the
+     * default list. Same availability rules as getAvailablePackages().
+     */
+    public function paginateByZipPrefix(?string $zipPrefix, int $perPage)
+    {
+        $zipFilter = function ($query) use ($zipPrefix) {
+            $query->where('is_active', true);
+            if ($zipPrefix !== null && $zipPrefix !== '') {
+                $query->where('code', 'like', $zipPrefix . '%');
+            }
+        };
+
+        return ServicePackage::query()
+            ->with([
+                'agent:id,first_name,last_name',
+                'zipCodes' => function ($query) use ($zipFilter) {
+                    $zipFilter($query);
+                    $query->orderBy('code');
+                },
+            ])
+            ->where('is_active', true)
+            ->whereHas('zipCodes', $zipFilter)
+            ->whereHas('agent', function ($query) {
+                $query->where('is_active', true)
+                      ->whereHas('agentPackages', function ($q) {
+                          $q->where('expires_at', '>', now());
+                      });
+            })
+            ->latest('id')
+            ->paginate($perPage);
     }
 
     /**

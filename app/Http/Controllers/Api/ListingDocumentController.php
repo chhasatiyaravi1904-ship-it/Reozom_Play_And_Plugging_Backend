@@ -475,11 +475,7 @@ class ListingDocumentController extends Controller
         $html = $this->renderStatutoryHtml($listing, $document, $answers);
 
         if (class_exists(Pdf::class)) {
-            $pdf = Pdf::loadHTML($html)
-                ->setPaper('letter', 'portrait')
-                ->setWarnings(false);
-
-            $pdfContent = $pdf->output();
+            $pdfContent = $this->htmlToPdf($html);
 
             return response($pdfContent, 200, [
                 'Content-Type' => 'application/pdf',
@@ -574,7 +570,7 @@ class ListingDocumentController extends Controller
             $answers = app(DisclosureService::class)->getAnswers($listing);
             $html = $this->renderStatutoryHtml($listing, $document, $answers);
             if (class_exists(Pdf::class)) {
-                $pdfContent = Pdf::loadHTML($html)->output();
+                $pdfContent = $this->htmlToPdf($html);
                 $tempRel = "listings/{$listing->id}/statutory/{$document->type}.pdf";
                 Storage::disk('local')->put($tempRel, $pdfContent);
                 $filePath = Storage::disk('local')->path($tempRel);
@@ -695,7 +691,7 @@ class ListingDocumentController extends Controller
                 }
 
                 if (class_exists(Pdf::class)) {
-                    $pdfContent = Pdf::loadHTML($html)->setPaper('letter', 'portrait')->output();
+                    $pdfContent = $this->htmlToPdf($html);
                     $zip->addFromString("{$doc->type}_{$filename}", $pdfContent);
                 } else {
                     $zip->addFromString("{$doc->type}_{$doc->original_name}.html", $html);
@@ -946,69 +942,91 @@ HTML;
     <meta charset="utf-8">
     <title>{$docTitle} - {$refCode}</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.5; color: #1e293b; background: #f8fafc; padding: 24px; margin: 0; }
-        .document-container { max-width: 820px; margin: 0 auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 36px; }
-        .header-table { width: 100%; border-bottom: 2px solid #0f766e; padding-bottom: 14px; margin-bottom: 20px; border-collapse: collapse; }
-        .header-table td { vertical-align: bottom; }
-        .header-title { font-size: 20px; font-weight: bold; color: #0f766e; text-transform: uppercase; margin: 0; }
-        .meta-table { width: 100%; border-collapse: collapse; margin-bottom: 24px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; }
-        .meta-table td { padding: 8px 12px; font-size: 12px; border-bottom: 1px solid #e2e8f0; }
-        .meta-table td strong { color: #334155; }
-        h2 { font-size: 14px; border-bottom: 1px solid #cbd5e1; padding-bottom: 5px; margin-top: 20px; margin-bottom: 10px; color: #0f172a; text-transform: uppercase; }
-        p { font-size: 12px; color: #475569; }
-        .checklist { width: 100%; border-collapse: collapse; margin-top: 10px; margin-bottom: 16px; }
-        .checklist th, .checklist td { border: 1px solid #cbd5e1; padding: 8px 10px; font-size: 11px; text-align: left; vertical-align: top; }
-        .checklist th { background: #f1f5f9; font-weight: 600; color: #334155; }
-        .sign-box { margin-top: 28px; padding: 18px 0 0 0; background: #ffffff; page-break-inside: avoid; }
-        .legal-notice { font-size: 10px; color: #64748b; margin-top: 20px; line-height: 1.4; border-top: 1px solid #e2e8f0; padding-top: 10px; }
-        @media print {
-            body { background: #fff; padding: 0; }
-            .document-container { border: none; padding: 0; max-width: 100%; }
-            .no-print { display: none; }
-        }
+        /* Formal legal-document layout (US Letter). dompdf supports tables,
+           fixed header/footer and page counters, but not flexbox/grid. */
+        @page { margin: 0.6in 0.75in 0.75in 0.75in; }
+        body { font-family: "Times New Roman", Times, serif; font-size: 10.5pt; line-height: 1.35; color: #111111; background: #ffffff; margin: 0; }
+        .document-container { max-width: 7in; margin: 0 auto; }
+        .letterhead { width: 100%; border-collapse: collapse; border-bottom: 2px solid #0f6b5c; margin-bottom: 4px; }
+        .letterhead td { vertical-align: middle; padding-bottom: 8px; }
+        .brand { font-family: Helvetica, Arial, sans-serif; font-size: 15pt; font-weight: bold; letter-spacing: 3px; color: #0f6b5c; }
+        .brand-sub { font-family: Helvetica, Arial, sans-serif; font-size: 7.5pt; letter-spacing: 1px; color: #555555; text-transform: uppercase; }
+        .ref { font-family: Helvetica, Arial, sans-serif; font-size: 8.5pt; color: #333333; text-align: right; line-height: 1.5; }
+        .doc-title { text-align: center; margin: 14px 0 2px 0; font-size: 14pt; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; }
+        .doc-subtitle { text-align: center; font-size: 9pt; font-style: italic; color: #444444; margin-bottom: 12px; }
+        .parties { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
+        .parties td { border: 1px solid #999999; padding: 5px 8px; font-size: 10pt; vertical-align: top; }
+        .parties .label { width: 22%; background: #f2f2f2; font-weight: bold; }
+        .doc-body h2 { font-size: 10.5pt; font-weight: bold; text-transform: uppercase; margin: 14px 0 5px 0; padding-bottom: 2px; border-bottom: 1px solid #111111; }
+        .doc-body p { font-size: 10.5pt !important; color: #111111 !important; text-align: justify; margin: 0 0 6px 0; line-height: 1.35 !important; }
+        .checklist { width: 100%; border-collapse: collapse; margin: 8px 0 14px 0; }
+        .checklist th, .checklist td { border: 1px solid #777777; padding: 4px 6px; font-size: 9.5pt; text-align: left; vertical-align: top; }
+        .checklist th { background: #e8e8e8; font-weight: bold; color: #111111; }
+        .certification { margin-top: 16px; font-size: 10pt; font-style: italic; page-break-inside: avoid; }
+        .sign-box { margin-top: 8px; page-break-inside: avoid; }
+        .legal-notice { font-size: 8pt; color: #333333; margin-top: 14px; line-height: 1.35; border-top: 1px solid #999999; padding-top: 6px; text-align: justify; }
+        .page-footer { position: fixed; bottom: -0.5in; left: 0; right: 0; height: 0.3in; font-family: Helvetica, Arial, sans-serif; font-size: 7.5pt; color: #555555; border-top: 0.5px solid #999999; padding-top: 4px; }
+        .page-footer table { width: 100%; border-collapse: collapse; }
+        @media print { .no-print { display: none; } }
     </style>
 </head>
 <body>
-    <div class="no-print" style="max-width:820px;margin:0 auto 16px auto;text-align:right;">
-        <button onclick="window.print()" style="background:#0f766e;color:#fff;border:none;padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">Print Document</button>
+    <!-- no-print -->
+    <div class="no-print" style="max-width:7in;margin:12px auto;text-align:right;">
+        <button onclick="window.print()" style="background:#0f6b5c;color:#fff;border:none;padding:7px 14px;border-radius:4px;font-size:12px;cursor:pointer;">Print Document</button>
+    </div>
+    <!-- /no-print -->
+
+    <div class="page-footer">
+        <table><tr>
+            <td>REOZOM &middot; Ref. {$refCode} &middot; {$docTitle}</td>
+            <td style="text-align:right;">&nbsp;</td>
+        </tr></table>
     </div>
 
     <div class="document-container">
-        <table class="header-table">
+        <table class="letterhead">
             <tr>
                 <td>
-                    <div class="header-title">{$docTitle}</div>
-                    <div style="font-size:12px;color:#64748b;margin-top:3px;">State of {$state} Statutory Real Estate Compliance Document</div>
+                    <div class="brand">REOZOM</div>
+                    <div class="brand-sub">Real Estate Transaction Platform</div>
                 </td>
-                <td style="text-align:right;">
-                    <div style="font-family:monospace;font-weight:bold;color:#0f766e;font-size:15px;">{$refCode}</div>
-                    <div style="font-size:11px;color:#94a3b8;margin-top:2px;">{$date}</div>
+                <td class="ref">
+                    Reference No. <strong>{$refCode}</strong><br>
+                    Date: {$date}
                 </td>
             </tr>
         </table>
 
-        <table class="meta-table">
+        <div class="doc-title">{$docTitle}</div>
+        <div class="doc-subtitle">State of {$state} &mdash; Statutory Real Estate Disclosure Document</div>
+
+        <table class="parties">
             <tr>
-                <td style="width:60%;"><strong>Property Address:</strong> {$address}</td>
-                <td style="width:40%;"><strong>Owner / Seller:</strong> {$seller}</td>
+                <td class="label">Property</td>
+                <td colspan="3">{$address}</td>
             </tr>
             <tr>
-                <td><strong>Package:</strong> {$packageName}</td>
-                <td><strong>Status:</strong> {$listing->status}</td>
+                <td class="label">Seller / Owner</td>
+                <td style="width:35%;">{$seller}</td>
+                <td class="label">Service Package</td>
+                <td>{$packageName}</td>
             </tr>
         </table>
 
-        {$bodyContent}
+        <div class="doc-body">
+            {$bodyContent}
+        </div>
 
+        <div class="certification">
+            By signing below, the Seller certifies that the information in this document is true and correct to the best of the Seller's knowledge as of the date signed.
+        </div>
         <div class="sign-box">
-            <div style="font-size:11px;color:#64748b;margin-bottom:6px;">
-                By signing, the seller certifies that the information provided in this document is true and correct to the best of their knowledge.
-            </div>
             {$signatureBlock}
         </div>
 
         <div class="legal-notice">
-            <strong>Legal Notice:</strong> This document is generated through the Reozom Platform as an electronic statutory record. The seller acknowledges that prospective purchasers may rely upon this disclosure in making an offer. In accordance with state law, the seller must promptly amend this disclosure in writing if any material change occurs prior to closing.
+            <strong>Notice:</strong> This document is generated through the Reozom Platform as an electronic statutory record. Prospective purchasers may rely upon this disclosure in making an offer. In accordance with state law, the Seller must promptly amend this disclosure in writing if any material change occurs prior to closing.
         </div>
     </div>
 </body>
@@ -1029,10 +1047,13 @@ HTML;
             $pad = str_repeat('&nbsp;', 12);
             $label = htmlspecialchars($signer['name']).' ('.htmlspecialchars($signer['email']).')';
 
-            return '<td style="width:44%;font-size:11px;color:#334155;vertical-align:bottom;">'
+            // The white "$sN" paragraph is EunoDoc's placement anchor: keep its size/position as is.
+            return '<td style="width:44%;font-size:9.5pt;color:#111111;vertical-align:bottom;">'
                 .'<p style="margin:0;text-align:center;border-bottom:0.5px solid #000;color:#ffffff;font-size:25px;line-height:30px;">'
                 ."{$pad}{$tag}{$pad}</p>"
-                ."Seller: {$label}<br>Date: ____________________"
+                .'<div style="font-size:7.5pt;color:#555555;text-transform:uppercase;letter-spacing:0.5px;">Seller Signature</div>'
+                ."<div style=\"margin-top:3px;\"><strong>{$label}</strong></div>"
+                .'<div style="margin-top:8px;">Date: ______________________</div>'
                 .'</td>';
         };
 
@@ -1072,7 +1093,28 @@ HTML;
         $answers = app(DisclosureService::class)->getAnswers($listing);
         $html = $this->renderStatutoryHtml($listing, $document, $answers);
 
-        return Pdf::loadHTML($html)->setPaper('letter', 'portrait')->setWarnings(false)->output();
+        return $this->htmlToPdf($html);
+    }
+
+    /**
+     * One place that turns a generated document into a US Letter PDF: drops the
+     * browser-only print bar (dompdf ignores @media print) and stamps
+     * "Page X of Y" on every page (dompdf doesn't support counter(pages)).
+     */
+    private function htmlToPdf(string $html): string
+    {
+        $html = preg_replace('#<!--\s*no-print\s*-->.*?<!--\s*/no-print\s*-->#s', '', $html) ?? $html;
+
+        $pdf = Pdf::loadHTML($html)->setPaper('letter', 'portrait')->setWarnings(false);
+        $dompdf = $pdf->getDomPDF();
+        $dompdf->render();
+
+        $canvas = $dompdf->getCanvas();
+        $font = $dompdf->getFontMetrics()->getFont('Helvetica');
+        // Letter = 612 x 792 pt; right-aligned inside the page footer line.
+        $canvas->page_text(500, 757, 'Page {PAGE_NUM} of {PAGE_COUNT}', $font, 7.5, [0.33, 0.33, 0.33]);
+
+        return $dompdf->output();
     }
 
     /**

@@ -19,6 +19,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use App\Mail\TwoFactorCodeMail;
@@ -26,6 +27,21 @@ use Spatie\Permission\Models\Role;
 
 class AuthController extends Controller
 {
+    private const TWO_FACTOR_MAX_ATTEMPTS = 5;
+
+    /** Fixed code for local development and tests only; random everywhere else. */
+    private static function newTwoFactorCode(): string
+    {
+        return app()->environment(['local', 'testing'])
+            ? '123456'
+            : (string) random_int(100000, 999999);
+    }
+
+    private static function twoFactorFailKey(string $email): string
+    {
+        return '2fa-fail:' . Str::lower($email);
+    }
+
     public function __construct(
         private readonly LoginActivityLogger $loginActivityLogger,
         private readonly AdminActivityLogger $adminActivityLogger,
@@ -86,6 +102,12 @@ class AuthController extends Controller
     private function assignPackage(User $user, string $packageId, Request $request): void
     {
         $package = Package::findOrFail($packageId);
+
+        // A paid package is only activated by a confirmed Stripe payment; the
+        // agent is sent to the subscription page to pay after signing up.
+        if (! \App\Services\PaymentService::isFree($package->price)) {
+            return;
+        }
 
         DB::transaction(function () use ($user, $package, $request) {
             $user->agentPackages()->create([
@@ -172,11 +194,13 @@ class AuthController extends Controller
             ]);
         }
 
-        $code = app()->environment('local') ? '123456' : (string) rand(100000, 999999);
-        $user->update([
+        $code = self::newTwoFactorCode();
+        $user->forceFill([
             'two_factor_code' => $code,
             'two_factor_expires_at' => now()->addMinutes(10),
-        ]);
+        ])->save();
+        // Correct password: a fresh code gets a fresh set of attempts.
+        RateLimiter::clear(self::twoFactorFailKey($user->email));
 
         Mail::to($user->email)->send(new TwoFactorCodeMail($code));
 
@@ -197,23 +221,38 @@ class AuthController extends Controller
         ]);
 
         $user = User::where('email', $request->email)->first();
+        $failKey = self::twoFactorFailKey((string) $request->email);
 
-        // if (! $user || (string) $user->two_factor_code !== (string) $request->code) {
-        //     throw ValidationException::withMessages([
-        //         'code' => ['The provided two-factor authentication code is incorrect.'],
-        //     ]);
-        // }
+        // Too many wrong codes: the pending code can't be used any more; a new
+        // password login resets this. (The counter lives in the cache, which
+        // the request's DB rollback doesn't undo.)
+        if (RateLimiter::tooManyAttempts($failKey, self::TWO_FACTOR_MAX_ATTEMPTS)) {
+            throw ValidationException::withMessages([
+                'code' => ['Too many incorrect codes. Please sign in again.'],
+            ])->status(429);
+        }
 
-        // if (now()->greaterThan($user->two_factor_expires_at)) {
-        //     throw ValidationException::withMessages([
-        //         'code' => ['The two-factor authentication code has expired.'],
-        //     ]);
-        // }
+        // A code only exists after a correct password (login); compare in constant time.
+        if (! $user || ! $user->two_factor_code
+            || ! hash_equals((string) $user->two_factor_code, (string) $request->code)) {
+            RateLimiter::hit($failKey, 600);
+            throw ValidationException::withMessages([
+                'code' => ['The provided two-factor authentication code is incorrect.'],
+            ]);
+        }
 
-        $user->update([
+        if (! $user->two_factor_expires_at || now()->greaterThan($user->two_factor_expires_at)) {
+            throw ValidationException::withMessages([
+                'code' => ['The two-factor authentication code has expired.'],
+            ]);
+        }
+
+        RateLimiter::clear($failKey);
+
+        $user->forceFill([
             'two_factor_code' => null,
             'two_factor_expires_at' => null,
-        ]);
+        ])->save();
 
         $user->loadMissing('currentAgentPackage.package');
         $token = $user->createToken('api-token')->plainTextToken;
@@ -241,16 +280,17 @@ class AuthController extends Controller
 
         $user = User::where('email', $request->email)->first();
 
-        if (! $user) {
-            // Return success even if user not found to prevent user enumeration
+        // Only resend while a password-verified login is pending; answer the
+        // same either way so the response doesn't reveal which emails exist.
+        if (! $user || ! $user->two_factor_code) {
             return api_success(null, 'If the email exists, a new code has been sent.');
         }
 
-        $code = app()->environment('local') ? '123456' : (string) rand(100000, 999999);
-        $user->update([
+        $code = self::newTwoFactorCode();
+        $user->forceFill([
             'two_factor_code' => $code,
             'two_factor_expires_at' => now()->addMinutes(10),
-        ]);
+        ])->save();
 
         Mail::to($user->email)->send(new TwoFactorCodeMail($code));
 

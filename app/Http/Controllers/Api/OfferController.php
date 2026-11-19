@@ -26,6 +26,9 @@ class OfferController extends Controller
      */
     public function sendOfferConfig(Request $request, Listing $listing): JsonResponse
     {
+        // Only for listings this user may see (published, or their own): no draft details by ID.
+        Gate::authorize('view', $listing);
+
         $buyer = $request->user();
         $isListingOwner = ($listing->user_id === $buyer->id);
 
@@ -136,6 +139,8 @@ class OfferController extends Controller
      */
     public function examplePurchaseAgreement(Request $request, Listing $listing)
     {
+        Gate::authorize('view', $listing);
+
         $mockOffer = new ListingOffer([
             'reference_code' => 'SAMPLE-PA',
             'offer_amount' => $listing->details?->price ?? $listing->price ?? 350000,
@@ -319,15 +324,17 @@ class OfferController extends Controller
         $involvement = $request->query('involvement', 'action_required'); // action_required, received, sent, all
         $status = $request->query('status');
         $search = $request->query('search');
-        $perPage = (int) $request->query('per_page', 15);
+        $perPage = min(max((int) $request->query('per_page', 15), 1), 50);
 
-        // Get listings owned or represented by this user
+        // Listings this user owns: they can act (accept/counter/reject) on these offers.
         $userListingIds = Listing::where('user_id', $user->id)->pluck('id');
+        // "Received" also covers an agent's clients: listings on one of the agent's plans (view only).
+        $receivedListingIds = $this->receivedListingIds($user);
 
         // Base query for all offers involving the user (or all if admin)
         $query = ListingOffer::with([
             'listing:id,reference_code,address,city,state,zip,status,user_id',
-            'listing.user:id,name,first_name,last_name,email',
+            'listing.user:id,name,first_name,last_name,email,role,is_active',
             'buyer:id,name,first_name,last_name,email,phone',
             'actions.user:id,name,first_name,last_name',
             'documents',
@@ -345,15 +352,15 @@ class OfferController extends Controller
               ->where('status', ListingOffer::STATUS_COUNTERED_BY_SELLER);
         })->count();
 
-        $receivedCount = ListingOffer::whereIn('listing_id', $userListingIds)->count();
+        $receivedCount = ListingOffer::whereIn('listing_id', $receivedListingIds)->count();
         $sentCount = ListingOffer::where('buyer_id', $user->id)->count();
 
         if ($user->isAdmin()) {
             $totalCount = ListingOffer::count();
         } else {
-            $totalCount = ListingOffer::where(function ($q) use ($user, $userListingIds) {
+            $totalCount = ListingOffer::where(function ($q) use ($user, $receivedListingIds) {
                 $q->where('buyer_id', $user->id)
-                  ->orWhereIn('listing_id', $userListingIds);
+                  ->orWhereIn('listing_id', $receivedListingIds);
             })->count();
         }
 
@@ -369,14 +376,14 @@ class OfferController extends Controller
                 });
             });
         } elseif ($involvement === 'received') {
-            $query->whereIn('listing_id', $userListingIds);
+            $query->whereIn('listing_id', $receivedListingIds);
         } elseif ($involvement === 'sent') {
             $query->where('buyer_id', $user->id);
         } else { // 'all'
             if (!$user->isAdmin()) {
-                $query->where(function ($q) use ($user, $userListingIds) {
+                $query->where(function ($q) use ($user, $receivedListingIds) {
                     $q->where('buyer_id', $user->id)
-                      ->orWhereIn('listing_id', $userListingIds);
+                      ->orWhereIn('listing_id', $receivedListingIds);
                 });
             }
         }
@@ -408,7 +415,7 @@ class OfferController extends Controller
         $paginated = $query->orderBy('updated_at', 'desc')->paginate($perPage);
 
         // Decorate each offer with user's involvement metadata
-        $paginated->getCollection()->transform(function (ListingOffer $offer) use ($user) {
+        $paginated->getCollection()->transform(function (ListingOffer $offer) use ($user, $receivedListingIds) {
             $isBuyer = ($offer->buyer_id === $user->id);
             $isSeller = ($offer->listing && $offer->listing->user_id === $user->id);
 
@@ -417,6 +424,8 @@ class OfferController extends Controller
                 $myRole = 'seller';
             } elseif ($isBuyer) {
                 $myRole = 'buyer';
+            } elseif ($receivedListingIds->contains($offer->listing_id)) {
+                $myRole = 'agent'; // the listing uses one of this agent's plans (view only)
             } elseif ($user->isAdmin()) {
                 $myRole = 'admin';
             }
@@ -447,21 +456,51 @@ class OfferController extends Controller
     }
 
     /**
-     * Unified offer details endpoint for any involved participant (Buyer, Seller, or Admin).
+     * Listings whose offers this user receives: their own listings, plus (for an
+     * agent) listings created on one of their plans for a client.
+     */
+    private function receivedListingIds(\App\Models\User $user): \Illuminate\Support\Collection
+    {
+        return Listing::where('user_id', $user->id)
+            ->when($user->isAgent(), fn ($q) => $q->orWhereHas(
+                'servicePackage',
+                fn ($sp) => $sp->where('agent_id', $user->id)
+            ))
+            ->pluck('id');
+    }
+
+    /**
+     * Who may read all offers on a listing: its owner, the agent whose plan it
+     * uses, or an admin. (Not "anyone who can view the listing": published
+     * listings are visible to every user, and offers hold other buyers' data.)
+     */
+    private function canReadListingOffers(\App\Models\User $user, ?Listing $listing): bool
+    {
+        if (! $listing) {
+            return $user->isAdmin();
+        }
+
+        return $user->isAdmin()
+            || $listing->user_id === $user->id
+            || ($user->isAgent() && $listing->servicePackage?->agent_id === $user->id);
+    }
+
+    /**
+     * Unified offer details endpoint for any involved participant (Buyer, Seller, the listing's Agent, or Admin).
      */
     public function showOffer(Request $request, ListingOffer $offer): JsonResponse
     {
         $user = $request->user();
-        $isParticipant = ($offer->buyer_id === $user->id || $offer->listing->user_id === $user->id || $user->isAdmin());
+        $isBuyer = ($offer->buyer_id === $user->id);
+        $isParticipant = $isBuyer || $this->canReadListingOffers($user, $offer->listing);
 
         if (!$isParticipant) {
             return response()->json(['message' => 'Unauthorized to view this offer.'], 403);
         }
 
-        $isBuyer = ($offer->buyer_id === $user->id);
         $isSeller = ($offer->listing && $offer->listing->user_id === $user->id);
 
-        $myRole = $isSeller ? 'seller' : ($isBuyer ? 'buyer' : ($user->isAdmin() ? 'admin' : 'participant'));
+        $myRole = $isSeller ? 'seller' : ($isBuyer ? 'buyer' : ($user->isAdmin() ? 'admin' : 'agent'));
         $isActionRequired = ($isSeller && in_array($offer->status, ['submitted', 'countered_by_buyer'])) ||
                             ($isBuyer && $offer->status === 'countered_by_seller');
 
@@ -521,7 +560,7 @@ class OfferController extends Controller
      */
     public function listingOffers(Request $request, Listing $listing): JsonResponse
     {
-        Gate::authorize('view', $listing);
+        abort_unless($this->canReadListingOffers($request->user(), $listing), 403, 'You are not allowed to view the offers on this listing.');
 
         $offers = $listing->offers()
             ->with([
@@ -544,7 +583,7 @@ class OfferController extends Controller
      */
     public function showSellerOffer(Request $request, ListingOffer $offer): JsonResponse
     {
-        Gate::authorize('view', $offer->listing);
+        abort_unless($this->canReadListingOffers($request->user(), $offer->listing), 403, 'You are not allowed to view this offer.');
 
         return response()->json($offer->load([
             'listing',
@@ -697,8 +736,7 @@ class OfferController extends Controller
     public function downloadDocument(Request $request, ListingOffer $offer, ListingOfferDocument $document): StreamedResponse|JsonResponse
     {
         $user = $request->user();
-        $isAdmin = $user->isAdmin();
-        $isParticipant = ($offer->buyer_id === $user->id || $offer->listing->user_id === $user->id || $isAdmin);
+        $isParticipant = ($offer->buyer_id === $user->id || $this->canReadListingOffers($user, $offer->listing));
 
         if (!$isParticipant) {
             return response()->json(['message' => 'Unauthorized to access this document.'], 403);
@@ -724,8 +762,7 @@ class OfferController extends Controller
     public function downloadContract(Request $request, ListingOffer $offer)
     {
         $user = $request->user();
-        $isAdmin = $user->isAdmin();
-        $isParticipant = ($offer->buyer_id === $user->id || $offer->listing->user_id === $user->id || $isAdmin);
+        $isParticipant = ($offer->buyer_id === $user->id || $this->canReadListingOffers($user, $offer->listing));
 
         if (!$isParticipant) {
             return response()->json(['message' => 'Unauthorized to access this contract.'], 403);
@@ -955,7 +992,7 @@ HTML;
         $query = ListingOffer::with([
             'listing:id,reference_code,address,city,state,zip,status,user_id',
             'listing.user:id,name,email,first_name,last_name',
-            'buyer:id,name,email,first_name,last_name',
+            'buyer:id,name,email,first_name,last_name,role,is_active',
             'documents',
             'purchasers',
             'actions.user:id,name,first_name,last_name',
@@ -1024,8 +1061,8 @@ HTML;
     {
         return response()->json($offer->load([
             'listing:id,reference_code,address,city,state,zip,status,user_id',
-            'listing.user:id,name,first_name,last_name,email',
-            'buyer:id,name,email,first_name,last_name',
+            'listing.user:id,name,first_name,last_name,email,role,is_active',
+            'buyer:id,name,email,first_name,last_name,role,is_active',
             'actions.user:id,name,first_name,last_name',
             'documents',
             'purchasers',

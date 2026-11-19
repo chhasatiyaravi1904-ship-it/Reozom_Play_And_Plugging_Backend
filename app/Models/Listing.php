@@ -297,7 +297,7 @@ class Listing extends Model
         'directions' => ['directions'],
     ];
 
-    private const PROPERTY_TYPE_LABELS = [
+    public const PROPERTY_TYPE_LABELS = [
         'single_family' => 'Single Family Home',
         'condo' => 'Condominium',
         'townhouse' => 'Townhouse',

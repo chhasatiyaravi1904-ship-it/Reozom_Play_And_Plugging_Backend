@@ -56,4 +56,17 @@ return [
         'redirect' => env('TWITTER_REDIRECT_URI'),
     ],
 
+    // Stripe Checkout. Keys live only in .env (test keys: pk_test_/sk_test_), never in code.
+    'stripe' => [
+        'key' => env('STRIPE_KEY'),
+        'secret' => env('STRIPE_SECRET'),
+        'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
+        // Separate endpoint/secret for events from agents' Connect accounts
+        'connect_webhook_secret' => env('STRIPE_CONNECT_WEBHOOK_SECRET'),
+        'currency' => strtolower(env('STRIPE_CURRENCY', 'usd')),
+        // Stripe's standard US card fee, recovered from the agent on seller payments
+        'processing_fee_percent' => (float) env('STRIPE_FEE_PERCENT', 2.9),
+        'processing_fee_fixed_cents' => (int) env('STRIPE_FEE_FIXED_CENTS', 30),
+    ],
+
 ];

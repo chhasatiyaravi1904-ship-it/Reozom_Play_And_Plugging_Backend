@@ -35,6 +35,9 @@ class PublicListingResource extends JsonResource
             ],
             // Only expose the safely extracted public answers
             'public_info' => $publicData['fields'],
+            // Public routes run without auth middleware; resolve the bearer token (if any)
+            // so the UI can stop owners from making an offer on their own listing.
+            'is_owner' => ($viewer = auth('sanctum')->user()) !== null && $viewer->id === $this->user_id,
             'values' => $extractedValues,
             'images' => $this->whenLoaded('images', function () {
                 return $this->images->map(function ($image) {

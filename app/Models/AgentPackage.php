@@ -35,4 +35,10 @@ class AgentPackage extends Model
     {
         return $this->belongsTo(Package::class);
     }
+
+    /** The Stripe payment that activated this package (none for free plans). */
+    public function payment(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(Payment::class);
+    }
 }

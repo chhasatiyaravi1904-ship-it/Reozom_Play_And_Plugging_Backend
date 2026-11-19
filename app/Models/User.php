@@ -24,7 +24,7 @@ use Spatie\Permission\Traits\HasRoles;
     'company', 'office_number', 'extension', 'profile_finished', 'is_active',
     'email_verified_at',
 ])]
-#[Hidden(['password', 'remember_token'])]
+#[Hidden(['password', 'remember_token', 'stripe_account_id', 'two_factor_code'])]
 class User extends Authenticatable implements MustVerifyEmail
 {
     /** @use HasFactory<UserFactory> */
@@ -44,7 +44,37 @@ class User extends Authenticatable implements MustVerifyEmail
             'password' => 'hashed',
             'profile_finished' => 'boolean',
             'is_active' => 'boolean',
+            'stripe_details_submitted' => 'boolean',
+            'stripe_charges_enabled' => 'boolean',
+            'stripe_payouts_enabled' => 'boolean',
+            'stripe_requirements_due' => 'integer',
+            'stripe_account_updated_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Stripe Connect payout account status:
+     * not_started | pending (onboarding or verification in progress) | ready | restricted.
+     */
+    public function payoutStatus(): string
+    {
+        if (! $this->stripe_account_id) {
+            return 'not_started';
+        }
+        if ($this->stripe_charges_enabled && $this->stripe_payouts_enabled) {
+            return 'ready';
+        }
+        if ($this->stripe_details_submitted && $this->stripe_disabled_reason && ! str_contains($this->stripe_disabled_reason, 'pending')) {
+            return 'restricted';
+        }
+
+        return 'pending';
+    }
+
+    /** Agent can be paid (sellers can buy the agent's plans). */
+    public function canReceivePayments(): bool
+    {
+        return $this->payoutStatus() === 'ready';
     }
 
     protected function role(): Attribute

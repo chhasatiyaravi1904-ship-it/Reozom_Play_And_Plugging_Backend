@@ -30,7 +30,7 @@ class ServicePackageController extends Controller
         $validated = $request->validate([
             'name' => 'required|string|max:255',
             'description' => 'nullable|string',
-            'price' => 'nullable|numeric|min:0',
+            'price' => ['nullable', 'numeric', 'min:0', new \App\Rules\StripeChargeablePrice()],
             'assigned_zips' => 'nullable|array',
             'is_active' => 'boolean',
             'listing_process_id' => 'nullable|exists:listing_processes,id',
@@ -115,7 +115,7 @@ class ServicePackageController extends Controller
         $validated = $request->validate([
             'name' => 'sometimes|required|string|max:255',
             'description' => 'nullable|string',
-            'price' => 'nullable|numeric|min:0',
+            'price' => ['nullable', 'numeric', 'min:0', new \App\Rules\StripeChargeablePrice()],
             'assigned_zips' => 'nullable|array',
             'is_active' => 'boolean',
             'listing_process_id' => 'nullable|exists:listing_processes,id',

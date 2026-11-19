@@ -23,10 +23,12 @@ Route::controller(PublicGeographyController::class)->prefix('public')->group(fun
 
 Route::controller(\App\Http\Controllers\Api\PublicServicePackageController::class)->prefix('public')->group(function () {
     Route::get('service-packages/search', 'search')->name('public.service-packages.search');
+    Route::get('service-packages', 'index')->name('public.service-packages.index');
 });
 
 Route::controller(\App\Http\Controllers\Api\PublicListingController::class)->prefix('public')->group(function () {
     Route::get('listings', 'index')->name('public.listings.index');
+    Route::get('listings/filters', 'filters')->name('public.listings.filters');
     Route::get('listings/{listing}', 'show')->name('public.listings.show');
 });
 
@@ -35,12 +37,20 @@ Route::controller(\App\Http\Controllers\Api\PublicListingController::class)->pre
 Route::get('packages', [PackageController::class, 'index'])->name('packages.index');
 Route::get('login', fn () => response()->json(['message' => 'Unauthenticated.'], 401))->name('login');
 
+// Stripe calls this directly (no user session); every request is verified by its Stripe-Signature.
+Route::post('stripe/webhook', [\App\Http\Controllers\Api\PaymentController::class, 'webhook'])
+    ->middleware('throttle:120,1')
+    ->name('stripe.webhook');
+Route::post('stripe/connect-webhook', [\App\Http\Controllers\Api\ConnectController::class, 'webhook'])
+    ->middleware('throttle:120,1')
+    ->name('stripe.connect-webhook');
+
 Route::prefix('auth')->group(function () {
     Route::controller(AuthController::class)->group(function () {
         Route::post('register', 'register')->name('auth.register');
         Route::post('login', 'login')->name('auth.login');
-        Route::post('verify-2fa', 'verify2fa')->name('auth.verify-2fa');
-        Route::post('resend-2fa', 'resend2fa')->name('auth.resend-2fa');
+        Route::post('verify-2fa', 'verify2fa')->middleware('throttle:10,1')->name('auth.verify-2fa');
+        Route::post('resend-2fa', 'resend2fa')->middleware('throttle:5,1')->name('auth.resend-2fa');
     });
 
     Route::controller(\App\Http\Controllers\Api\PasswordResetController::class)->group(function () {
@@ -94,6 +104,17 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('{listing}/price', 'updatePrice')->name('listings.update-price');
         Route::put('{listing}/remarks', 'updateRemarks')->name('listings.update-remarks');
         Route::put('{listing}/compensation', 'updateCompensation')->name('listings.update-compensation');
+    });
+
+    // Stripe Checkout payments
+    Route::controller(\App\Http\Controllers\Api\PaymentController::class)->group(function () {
+        Route::post('packages/{package}/checkout', 'agentPackageCheckout')
+            ->middleware('throttle:10,1')->name('payments.agent-package.checkout');
+        Route::post('listings/{listing}/checkout', 'listingCheckout')
+            ->middleware('throttle:10,1')->name('payments.listing.checkout');
+        Route::get('listings/{listing}/payment-status', 'listingStatus')->name('payments.listing.status');
+        Route::get('payments/session/{sessionId}', 'showSession')
+            ->where('sessionId', 'cs_[A-Za-z0-9_]+')->name('payments.session');
     });
 
     Route::controller(\App\Http\Controllers\Api\ListingImageController::class)->prefix('listings/{listing}/images')->group(function () {
@@ -269,6 +290,8 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('/', 'store')->name('admin.packages.store');
                 Route::put('{package}', 'update')->name('admin.packages.update');
                 Route::delete('{package}', 'destroy')->name('admin.packages.destroy');
+                Route::post('{package}/stripe-sync', [\App\Http\Controllers\Api\PlanStripeSyncController::class, 'package'])
+                    ->middleware('throttle:20,1')->name('admin.packages.stripe-sync');
             });
         });
 
@@ -280,6 +303,18 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('{listing}/reject', 'reject')->name('admin.listings.reject');
             Route::post('{listing}/change-status', 'changeStatus')->name('admin.listings.change-status');
         });
+
+        Route::get('service-packages', [\App\Http\Controllers\Api\Admin\ServicePackageController::class, 'index'])->name('admin.service-packages.index');
+
+        Route::get('payments', [\App\Http\Controllers\Api\PaymentHistoryController::class, 'adminIndex'])->name('admin.payments.index');
+        Route::get('payment-settings', [\App\Http\Controllers\Api\Admin\PaymentSettingsController::class, 'show'])->name('admin.payment-settings.show');
+        Route::middleware('permission:manage-packages')->group(function () {
+            Route::put('payment-settings', [\App\Http\Controllers\Api\Admin\PaymentSettingsController::class, 'update'])->name('admin.payment-settings.update');
+            Route::post('payments/{payment}/refund', [\App\Http\Controllers\Api\Admin\PaymentSettingsController::class, 'refund'])
+                ->middleware('throttle:20,1')->name('admin.payments.refund');
+        });
+        Route::get('payouts', [\App\Http\Controllers\Api\PayoutController::class, 'adminIndex'])->name('admin.payouts.index');
+        Route::get('payout-accounts', [\App\Http\Controllers\Api\PayoutController::class, 'adminAccounts'])->name('admin.payout-accounts.index');
 
         Route::get('offers', [\App\Http\Controllers\Api\OfferController::class, 'adminIndex'])->name('admin.offers.index');
         Route::get('offers/{offer}', [\App\Http\Controllers\Api\OfferController::class, 'adminShow'])->name('admin.offers.show');
@@ -302,11 +337,29 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/', 'store')->name('agent.service-packages.store');
             Route::put('{servicePackage}', 'update')->name('agent.service-packages.update');
             Route::delete('{servicePackage}', 'destroy')->name('agent.service-packages.destroy');
+            Route::post('{servicePackage}/stripe-sync', [\App\Http\Controllers\Api\PlanStripeSyncController::class, 'servicePackage'])
+                ->middleware('throttle:20,1')->name('agent.service-packages.stripe-sync');
         });
+
+        Route::get('payments', [\App\Http\Controllers\Api\PaymentHistoryController::class, 'agentIndex'])->name('agent.payments.index');
+        Route::get('subscriptions', [PackageController::class, 'subscriptions'])->name('agent.subscriptions.index');
+
+        // Stripe Connect payout account (the logged-in agent's own)
+        Route::controller(\App\Http\Controllers\Api\ConnectController::class)->prefix('payout-account')->group(function () {
+            Route::get('/', 'show')->name('agent.payout-account.show');
+            Route::post('onboarding', 'onboarding')->middleware('throttle:10,1')->name('agent.payout-account.onboarding');
+            Route::post('dashboard', 'dashboard')->middleware('throttle:10,1')->name('agent.payout-account.dashboard');
+        });
+
+        // Agent balance and withdrawals
+        Route::get('payouts', [\App\Http\Controllers\Api\PayoutController::class, 'agentIndex'])->name('agent.payouts.index');
+        Route::post('payouts', [\App\Http\Controllers\Api\PayoutController::class, 'withdraw'])
+            ->middleware('throttle:5,1')->name('agent.payouts.withdraw');
     });
 
     // EunoDoc E-Signature Flows
     Route::controller(\App\Http\Controllers\Api\EunoSignController::class)->group(function () {
+        Route::get('me/pending-signatures', 'pendingSignatures')->name('me.pending-signatures');
         Route::post('listings/{listing}/euno-sign/initiate', 'initiateListingSigning')->name('listings.euno-sign.initiate');
         Route::get('listings/{listing}/euno-sign/status', 'getListingSigningStatus')->name('listings.euno-sign.status');
         Route::post('offers/{offer}/euno-sign/initiate', 'initiateOfferSigning')->name('offers.euno-sign.initiate');
@@ -317,6 +370,11 @@ Route::middleware('auth:sanctum')->group(function () {
 // EunoDoc Webhook callback & Direct Document / Audit Report Downloads
 Route::controller(\App\Http\Controllers\Api\EunoSignController::class)->group(function () {
     Route::post('euno/webhook', 'webhook')->name('euno.webhook');
+});
+
+// Signed documents and audit reports: logged-in participants only
+// (the frontend passes the token as ?token=, see QueryTokenToBearer).
+Route::controller(\App\Http\Controllers\Api\EunoSignController::class)->middleware('auth:sanctum')->group(function () {
     Route::get('euno-agreements/{agreement}/signed-doc', 'downloadSignedDocument')->name('euno-agreements.signed-doc');
     Route::get('euno-agreements/{agreement}/audit', 'downloadAuditReport')->name('euno-agreements.audit');
 });

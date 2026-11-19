@@ -188,4 +188,30 @@ class OfferManagementTest extends TestCase
         $response->assertJsonPath('id', $offer->id);
         $response->assertJsonPath('offer_amount', '430000.00');
     }
+
+    public function test_admin_offer_detail_includes_seller_and_buyer_role_and_status_for_login_as(): void
+    {
+        $offer = ListingOffer::create([
+            'listing_id' => $this->listing->id,
+            'buyer_id' => $this->buyer1->id,
+            'status' => ListingOffer::STATUS_SUBMITTED,
+            'offer_amount' => 430000,
+            'closing_date' => now()->addDays(30)->toDateString(),
+        ]);
+        $this->buyer1->forceFill(['is_active' => false])->save();
+
+        $admin = User::factory()->create(['role' => 'admin']);
+        $data = $this->actingAs($admin)->getJson("/api/admin/offers/{$offer->id}")->assertOk()->json();
+
+        $roleValue = fn (User $u) => $u->fresh()->role instanceof \BackedEnum ? $u->fresh()->role->value : $u->fresh()->role;
+
+        $this->assertSame($this->seller->id, $data['listing']['user']['id']);
+        $this->assertSame($roleValue($this->seller), $data['listing']['user']['role']);
+        $this->assertTrue((bool) $data['listing']['user']['is_active']);
+        $this->assertSame($roleValue($this->buyer1), $data['buyer']['role']);
+        $this->assertFalse((bool) $data['buyer']['is_active']);
+        // Still no secrets in the admin payload
+        $this->assertArrayNotHasKey('password', $data['buyer']);
+        $this->assertArrayNotHasKey('two_factor_code', $data['buyer']);
+    }
 }

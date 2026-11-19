@@ -59,18 +59,48 @@ class PublicListingController extends Controller
             $query->where('zip', 'like', "{$zip}%");
         }
 
-        // Property type filter
-        if ($propertyType = $request->input('property_type')) {
-            if ($propertyType !== 'all') {
-                $query->whereHas('answers', function ($ansQ) use ($propertyType) {
-                    $ansQ->where('values', 'like', '%"property_type":"' . $propertyType . '"%')
-                         ->orWhere('values', 'like', '%"property_type": "' . $propertyType . '"%');
-                });
-            }
-        }
+        $request->validate([
+            'property_type' => ['nullable', 'string', 'max:50'],
+            'min_price' => ['nullable', 'numeric', 'min:0'],
+            'max_price' => ['nullable', 'numeric', 'min:0'],
+        ]);
+
+        $propertyType = $request->input('property_type');
+        $propertyType = $propertyType === 'all' ? null : $propertyType;
+        $minPrice = $request->filled('min_price') ? (float) $request->input('min_price') : null;
+        $maxPrice = $request->filled('max_price') ? (float) $request->input('max_price') : null;
 
         $perPage = max(1, min((int) $request->input('per_page', 12), 50));
-        $listings = $query->paginate($perPage);
+        $page = max(1, (int) $request->input('page', 1));
+
+        if ($propertyType === null && $minPrice === null && $maxPrice === null) {
+            $listings = $query->paginate($perPage);
+        } else {
+            // Type and price are resolved from the listing's answers and
+            // workflow snapshot (publicPropertyType / publicValue), which SQL
+            // can't reproduce, so these filters run on the model.
+            $matching = $query->get()->filter(function (Listing $listing) use ($propertyType, $minPrice, $maxPrice) {
+                if ($propertyType !== null && $listing->publicPropertyType() !== $propertyType) {
+                    return false;
+                }
+                if ($minPrice !== null || $maxPrice !== null) {
+                    $price = self::numericPrice($listing->publicValue('listing_price'));
+                    if ($price === null
+                        || ($minPrice !== null && $price < $minPrice)
+                        || ($maxPrice !== null && $price > $maxPrice)) {
+                        return false;
+                    }
+                }
+                return true;
+            })->values();
+
+            $listings = new \Illuminate\Pagination\LengthAwarePaginator(
+                $matching->forPage($page, $perPage)->values(),
+                $matching->count(),
+                $perPage,
+                $page
+            );
+        }
 
         return response()->json([
             'success' => true,
@@ -82,6 +112,52 @@ class PublicListingController extends Controller
                 'total' => $listings->total(),
             ]
         ]);
+    }
+
+    /**
+     * Filter options that actually exist among published listings.
+     */
+    public function filters(): JsonResponse
+    {
+        $listings = Listing::published()->with('answers')->get();
+
+        $types = $listings->map(fn (Listing $listing) => $listing->publicPropertyType())
+            ->filter()
+            ->unique()
+            ->sort()
+            ->map(fn (string $type) => [
+                'value' => $type,
+                'label' => Listing::PROPERTY_TYPE_LABELS[$type] ?? ucwords(str_replace('_', ' ', $type)),
+            ])
+            ->values();
+
+        $prices = $listings->map(fn (Listing $listing) => self::numericPrice($listing->publicValue('listing_price')))
+            ->filter(fn ($price) => $price !== null);
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'property_types' => $types,
+                'price' => [
+                    'min' => $prices->min(),
+                    'max' => $prices->max(),
+                ],
+            ],
+        ]);
+    }
+
+    /** "$450,000" / "450000" / 450000 → 450000.0; anything else → null. */
+    private static function numericPrice(mixed $value): ?float
+    {
+        if (is_int($value) || is_float($value)) {
+            return (float) $value;
+        }
+        if (! is_string($value)) {
+            return null;
+        }
+        $clean = preg_replace('/[^0-9.]/', '', $value);
+
+        return is_numeric($clean) ? (float) $clean : null;
     }
 
     /**

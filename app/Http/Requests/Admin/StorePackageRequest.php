@@ -26,7 +26,7 @@ class StorePackageRequest extends FormRequest
             'name' => ['required', 'string', 'max:255'],
             'slug' => ['required', 'string', 'max:255', 'regex:/^[a-z0-9]+(?:-[a-z0-9]+)*$/', 'unique:packages,slug'],
             'description' => ['nullable', 'string'],
-            'price' => ['nullable', 'numeric', 'min:0'],
+            'price' => ['nullable', 'numeric', 'min:0', new \App\Rules\StripeChargeablePrice()],
             'duration_days' => ['required', 'integer', 'min:1'],
             'sort_order' => ['sometimes', 'integer', 'min:0'],
             'is_active' => ['sometimes', 'boolean'],
