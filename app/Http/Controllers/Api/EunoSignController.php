@@ -307,6 +307,31 @@ class EunoSignController extends Controller
             return api_error('Unauthorized to initiate signing on this offer.', 403);
         }
 
+        // The purchase agreement is only signed once the seller has accepted the offer.
+        if ($offer->status !== ListingOffer::STATUS_ACCEPTED) {
+            return api_error('The purchase agreement can be signed once the offer is accepted.', 422);
+        }
+
+        // Buyer and seller must sign the SAME agreement: if one is already open, hand this
+        // user their own link to it instead of creating a second agreement.
+        $existing = ListingEunoAgreement::where('listing_offer_id', $offer->id)
+            ->where('status', 'inprogress')
+            ->whereNotNull('agreement_id')
+            ->latest()
+            ->first();
+        if ($existing) {
+            $signingUrl = $this->eunoService->getSigningUrlForUser($existing->agreement_id, $user->email, $existing->signers ?? [])
+                ?? $existing->signing_url;
+
+            return api_success([
+                'agreement_id' => $existing->id,
+                'euno_agreement_id' => $existing->agreement_id,
+                'signing_url' => $signingUrl,
+                'status' => $existing->status,
+                'signers' => $existing->signers,
+            ], 'Existing offer agreement retrieved.');
+        }
+
         // Build signers array (Buyer and Seller)
         $signers = [
             [
@@ -384,6 +409,18 @@ class EunoSignController extends Controller
      */
     public function getOfferSigningStatus(Request $request, ListingOffer $offer): JsonResponse
     {
+        // The response carries the signing link, so only the offer's parties may read it:
+        // buyer, seller, the agent on the listing's plan, or an admin.
+        $user = $request->user();
+        $listing = $offer->listing;
+        $allowed = $user->isAdmin()
+            || $user->id === $offer->buyer_id
+            || $user->id === $listing?->user_id
+            || ($user->isAgent() && $listing?->servicePackage?->agent_id === $user->id);
+        if (! $allowed) {
+            return api_error('Unauthorized to view signing on this offer.', 403);
+        }
+
         $agreement = ListingEunoAgreement::where('listing_offer_id', $offer->id)
             ->latest()
             ->first();

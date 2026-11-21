@@ -76,16 +76,11 @@ class EmailVerificationController extends Controller
     }
 
     /**
-     * Agents never get a self-service verify link — only an admin can
-     * verify them from the Users page — so a "resend" for an agent just
-     * re-sends the "you're pending review" notice instead.
+     * Every role (seller/buyer and agent) verifies their own email with the signed link,
+     * the same email sent at registration. Admins can still verify a user from the Users page.
      */
     private function sendPendingNotification(User $user): void
     {
-        if ($user->role === UserRole::Agent) {
-            $user->notify(new AgentRegisteredNotification);
-        } else {
-            $user->sendEmailVerificationNotification();
-        }
+        $user->sendEmailVerificationNotification();
     }
 }

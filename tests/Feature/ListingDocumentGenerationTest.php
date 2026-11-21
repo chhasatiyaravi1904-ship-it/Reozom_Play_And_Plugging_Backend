@@ -192,6 +192,20 @@ class ListingDocumentGenerationTest extends TestCase
 
     public function test_vacant_land_gets_the_vacant_land_document_set(): void
     {
+        // Vacant land is no longer seeded (only the MI + FL residential processes are), but its
+        // document templates still exist; build the process from the Reozom definitions.
+        $codes = ['fl_vacant_land_disclosure'];
+        ListingProcess::create([
+            'name' => 'Florida Vacant Land Listing Process',
+            'type' => 'default',
+            'status' => 'active',
+            'required_disclosures' => $codes,
+            'config' => ListingProcessDefinitions::withDisclosureSteps(
+                ListingProcessDefinitions::getVacantLandProcessConfig(),
+                ListingProcessDefinitions::VACANT_LAND_LEGACY_DISCLOSURE_STEPS,
+                $codes
+            ),
+        ]);
         $listing = $this->flListing('Florida Vacant Land Listing Process');
         $this->saveStep($listing, 'step_property_information', ['list_price' => 99000, 'acreage' => 5]);
 

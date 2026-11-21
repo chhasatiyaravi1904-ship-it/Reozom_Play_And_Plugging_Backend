@@ -27,7 +27,8 @@ class DatabaseSeeder extends Seeder
         // Disclosures first: state listing processes copy their questions into disclosure steps
         $this->call(ReozomStatutoryDisclosuresSeeder::class);
         $this->call(DocumentTemplateSeeder::class);
-        $this->call(ListingProcessSeeder::class);
+        // Only the Michigan and Florida listing processes (original Reozom); the generic sample
+        // processes from ListingProcessSeeder are no longer seeded.
         $this->call(MichiganListingProcessSeeder::class);
         $this->call(FloridaListingProcessSeeder::class);
         $this->call(PublishedListingSeeder::class);

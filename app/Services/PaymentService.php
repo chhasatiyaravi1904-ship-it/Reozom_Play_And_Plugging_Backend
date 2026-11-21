@@ -79,12 +79,8 @@ class PaymentService
             throw ValidationException::withMessages(['listing' => 'This listing is already paid.']);
         }
 
-        // The money goes to the agent's Stripe account, so it must be ready to receive it.
-        $agent = $servicePackage->agent;
-        if (! $agent || ! $agent->canReceivePayments()) {
-            throw ValidationException::withMessages(['listing' => "This package can't be paid yet: the agent hasn't finished setting up payouts."]);
-        }
-
+        // The platform collects the whole payment; the agent's share is recorded below and
+        // withdrawn later (paid by bank transfer), so the agent needs no Stripe setup to be paid.
         // Agent pays both fees: platform fee + Stripe processing fee
         $split = $this->fees->split($amount);
 
@@ -98,7 +94,6 @@ class PaymentService
             'platform_fee' => $split['platform_fee'],
             'processing_fee' => $split['processing_fee'],
             'agent_amount' => $split['agent_amount'],
-            'destination_account_id' => $agent->stripe_account_id,
             'description' => "Listing {$listing->reference_code}: {$servicePackage->name}",
         ], $seller, $servicePackage);
     }
@@ -141,7 +136,7 @@ class PaymentService
             ]),
             'success_url' => "{$frontend}/payments/result?session_id={CHECKOUT_SESSION_ID}",
             'cancel_url' => "{$frontend}/payments/result?session_id={CHECKOUT_SESSION_ID}&canceled=1",
-        ] + $this->splitParams($attributes), 'checkout-'.$attributes['type'].'-'.Str::uuid());
+        ] + $this->listingIntentMetadata($attributes), 'checkout-'.$attributes['type'].'-'.Str::uuid());
 
         $payment = Payment::create($attributes + [
             // Agent package payments stay entirely with the platform
@@ -155,18 +150,16 @@ class PaymentService
     }
 
     /**
-     * Seller payments: the agent's share is transferred to their Connect account and the
-     * platform keeps the application fee (platform fee + Stripe processing fee).
+     * Seller payments stay entirely in the platform account (no split at payment time);
+     * the agent withdraws their share later. Only tag the payment so it can be traced.
      */
-    private function splitParams(array $attributes): array
+    private function listingIntentMetadata(array $attributes): array
     {
         if ($attributes['type'] !== Payment::TYPE_LISTING) {
             return [];
         }
 
         return ['payment_intent_data' => [
-            'application_fee_amount' => $attributes['platform_fee'] + $attributes['processing_fee'],
-            'transfer_data' => ['destination' => $attributes['destination_account_id']],
             'metadata' => ['type' => Payment::TYPE_LISTING, 'listing_id' => (string) $attributes['listing_id']],
         ]];
     }

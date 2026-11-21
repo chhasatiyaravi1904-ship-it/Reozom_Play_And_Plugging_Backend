@@ -157,10 +157,15 @@ class ListingProcessPackageLinkTest extends TestCase
     {
         $this->seed(\Database\Seeders\DatabaseSeeder::class);
 
-        // The agent's package uses the agent's own process, not the shared system default.
-        $agentProcess = ListingProcess::where('name', 'Agent Justin Premier MLS Process')->firstOrFail();
-        $this->assertNotEmpty($this->packagesOf($agentProcess));
-        $this->assertSame([], $this->packagesOf(ListingProcess::where('name', 'Michigan Residential Listing Process')->firstOrFail()));
+        // Only the two original Reozom processes exist after a full seed...
+        $seeded = ListingProcess::pluck('name')->sort()->values()->all();
+        $this->assertSame(['Florida Residential Listing Process', 'Michigan Residential Listing Process'], $seeded);
+
+        // ...and every seeded package (not the ones this test made in setUp) is linked to one of them.
+        $mine = [$this->package->id, $this->secondPackage->id, $this->otherPackage->id];
+        $this->assertSame(0, \App\Models\ServicePackage::whereNotIn('id', $mine)->whereNull('listing_process_id')->count());
+        $this->assertNotEmpty($this->packagesOf(ListingProcess::where('name', 'Michigan Residential Listing Process')->firstOrFail()));
+        $this->assertNotEmpty($this->packagesOf(ListingProcess::where('name', 'Florida Residential Listing Process')->firstOrFail()));
     }
 
     public function test_migration_moves_existing_links_to_the_packages(): void

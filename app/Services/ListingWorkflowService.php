@@ -102,6 +102,12 @@ class ListingWorkflowService
         $activeStepIds = array_column($listing->activeSteps(), 'id');
         $skippedStepIds = array_diff($snapshotStepIds, $activeStepIds);
 
+        // "Pictures & Virtual Tours" is only done once the listing really has a photo; saving the
+        // step's other fields (tour link, terms) alone doesn't complete it.
+        if (! $listing->images()->exists()) {
+            $answeredStepIds = array_diff($answeredStepIds, [\App\Models\ListingProcess::MEDIA_STEP_ID]);
+        }
+
         $validCompletedSteps = array_merge(array_intersect($snapshotStepIds, $answeredStepIds), $skippedStepIds);
         $completedCount = count(array_unique($validCompletedSteps));
 

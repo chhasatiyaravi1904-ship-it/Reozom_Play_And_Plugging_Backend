@@ -136,7 +136,6 @@ class FloridaListingProcessSeeder extends Seeder
 
             // SF and Condo disclosures are both attached; each step only shows for its property sub type.
             $residentialCodes = ['fl_residential_single_family', 'fl_residential_condo', 'lead_paint_disclosure'];
-            $vacantLandCodes = ['fl_vacant_land_disclosure'];
 
             $flResidentialProcess = ListingProcess::updateOrCreate(
                 ['name' => 'Florida Residential Listing Process'],
@@ -159,21 +158,8 @@ class FloridaListingProcessSeeder extends Seeder
                 $floridaPackage->update(['listing_process_id' => $flResidentialProcess->id]);
             }
 
-            ListingProcess::updateOrCreate(
-                ['name' => 'Florida Vacant Land Listing Process'],
-                [
-                    'type' => 'default',
-                    'status' => 'active',
-                    'agent_id' => null,
-                    'assigned_zips' => $zipStrings,
-                    'required_disclosures' => $vacantLandCodes,
-                    'config' => ListingProcessDefinitions::withDisclosureSteps(
-                        ListingProcessDefinitions::getVacantLandProcessConfig(),
-                        ListingProcessDefinitions::VACANT_LAND_LEGACY_DISCLOSURE_STEPS,
-                        $vacantLandCodes
-                    ),
-                ]
-            );
+            // Florida has exactly one listing process (as in the original Reozom). The fixed steps
+            // (Location on the Map, Pictures & Virtual Tours, Payment) come from enforceLockedSteps.
         });
     }
 }

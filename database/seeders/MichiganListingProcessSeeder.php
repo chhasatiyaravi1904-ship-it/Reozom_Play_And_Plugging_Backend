@@ -202,39 +202,8 @@ class MichiganListingProcessSeeder extends Seeder
                 $michiganPackage->update(['listing_process_id' => $miResidentialProcess->id]);
             }
 
-            // Ensure the generic Residential Property Listing Process has the exact same config
-            ListingProcess::updateOrCreate(
-                [
-                    'name' => 'Residential Property Listing Process',
-                    'agent_id' => null,
-                ],
-                [
-                    'type' => 'default',
-                    'status' => 'active',
-                    'assigned_zips' => $allMiZipStrings,
-                    'config' => $residentialConfig,
-                ]
-            );
-
-            // 7. Michigan Vacant Land Listing Process
-            $vacantLandCodes = ['mi_vacant_land_disclosure'];
-            ListingProcess::updateOrCreate(
-                [
-                    'name' => 'Michigan Vacant Land Listing Process',
-                ],
-                [
-                    'type' => 'default',
-                    'status' => 'active',
-                    'agent_id' => null,
-                    'assigned_zips' => $allMiZipStrings,
-                    'required_disclosures' => $vacantLandCodes,
-                    'config' => ListingProcessDefinitions::withDisclosureSteps(
-                        ListingProcessDefinitions::getVacantLandProcessConfig(),
-                        ListingProcessDefinitions::VACANT_LAND_LEGACY_DISCLOSURE_STEPS,
-                        $vacantLandCodes
-                    ),
-                ]
-            );
+            // Michigan has exactly one listing process (as in the original Reozom). The fixed steps
+            // (Location on the Map, Pictures & Virtual Tours, Payment) come from enforceLockedSteps.
         });
     }
 }

@@ -64,20 +64,12 @@ class ReozomFullWorkflowSeeder extends Seeder
             ]
         );
 
-        $baseProcess = ListingProcess::where('status', 'active')->whereNotNull('config')->first();
-        $snapshot = $baseProcess?->config ?? [];
+        // Only the Michigan and Florida processes exist (original Reozom), so these demo listings
+        // (Ann Arbor, MI) use the Michigan one instead of creating an extra agent process.
+        $agentCustomProcess = ListingProcess::where('name', 'Michigan Residential Listing Process')->first()
+            ?? ListingProcess::where('status', 'active')->whereNotNull('config')->firstOrFail();
+        $snapshot = $agentCustomProcess->config ?? [];
 
-        // Seed Agent Custom Dynamic Process
-        $agentCustomProcess = ListingProcess::firstOrCreate(
-            ['name' => 'Agent Justin Premier MLS Process', 'agent_id' => $agent->id],
-            [
-                'type' => 'custom',
-                'status' => 'active',
-                'config' => $snapshot,
-            ]
-        );
-
-        // The agent's package uses the agent's own process (not the shared system default).
         $package->update(['listing_process_id' => $agentCustomProcess->id]);
 
         // =========================================================================

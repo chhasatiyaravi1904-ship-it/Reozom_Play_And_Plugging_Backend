@@ -16,6 +16,19 @@ class StorePackageRequest extends FormRequest
     }
 
     /**
+     * Trim the website feature lists and drop empty rows before validating.
+     */
+    protected function prepareForValidation(): void
+    {
+        foreach (['included_features', 'excluded_features'] as $key) {
+            if (is_array($this->input($key))) {
+                $items = array_map(fn ($item) => is_string($item) ? trim($item) : $item, $this->input($key));
+                $this->merge([$key => array_values(array_filter($items, fn ($item) => $item !== '' && $item !== null))]);
+            }
+        }
+    }
+
+    /**
      * Get the validation rules that apply to the request.
      *
      * @return array<string, ValidationRule|array<mixed>|string>
@@ -33,6 +46,11 @@ class StorePackageRequest extends FormRequest
             'max_listing_processes' => ['nullable', 'integer', 'min:1'],
             'features' => ['nullable', 'array'],
             'features.*' => ['string'],
+            // Website card text: what the plan includes (✓) and doesn't include (✕), in display order
+            'included_features' => ['nullable', 'array', 'max:20'],
+            'included_features.*' => ['required', 'string', 'max:150', 'distinct'],
+            'excluded_features' => ['nullable', 'array', 'max:20'],
+            'excluded_features.*' => ['required', 'string', 'max:150', 'distinct'],
         ];
     }
 }

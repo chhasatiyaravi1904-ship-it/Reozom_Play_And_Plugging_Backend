@@ -315,6 +315,11 @@ Route::middleware('auth:sanctum')->group(function () {
         });
         Route::get('payouts', [\App\Http\Controllers\Api\PayoutController::class, 'adminIndex'])->name('admin.payouts.index');
         Route::get('payout-accounts', [\App\Http\Controllers\Api\PayoutController::class, 'adminAccounts'])->name('admin.payout-accounts.index');
+        // Withdrawal requests are paid by bank transfer, then marked paid (or rejected) here
+        Route::middleware(['permission:manage-packages', 'throttle:30,1'])->group(function () {
+            Route::post('payouts/{payout}/mark-paid', [\App\Http\Controllers\Api\PayoutController::class, 'markPaid'])->name('admin.payouts.mark-paid');
+            Route::post('payouts/{payout}/reject', [\App\Http\Controllers\Api\PayoutController::class, 'reject'])->name('admin.payouts.reject');
+        });
 
         Route::get('offers', [\App\Http\Controllers\Api\OfferController::class, 'adminIndex'])->name('admin.offers.index');
         Route::get('offers/{offer}', [\App\Http\Controllers\Api\OfferController::class, 'adminShow'])->name('admin.offers.show');
@@ -351,10 +356,14 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('dashboard', 'dashboard')->middleware('throttle:10,1')->name('agent.payout-account.dashboard');
         });
 
-        // Agent balance and withdrawals
+        // Agent balance, bank details and withdrawal requests (paid manually by an admin)
         Route::get('payouts', [\App\Http\Controllers\Api\PayoutController::class, 'agentIndex'])->name('agent.payouts.index');
         Route::post('payouts', [\App\Http\Controllers\Api\PayoutController::class, 'withdraw'])
             ->middleware('throttle:5,1')->name('agent.payouts.withdraw');
+        Route::post('payouts/{payout}/cancel', [\App\Http\Controllers\Api\PayoutController::class, 'cancel'])
+            ->middleware('throttle:10,1')->name('agent.payouts.cancel');
+        Route::put('bank-account', [\App\Http\Controllers\Api\PayoutController::class, 'saveBankAccount'])
+            ->middleware('throttle:10,1')->name('agent.bank-account.save');
     });
 
     // EunoDoc E-Signature Flows

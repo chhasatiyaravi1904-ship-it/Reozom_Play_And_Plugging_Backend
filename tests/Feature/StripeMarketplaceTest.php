@@ -18,8 +18,9 @@ use Tests\Support\FakeStripeGateway;
 use Tests\TestCase;
 
 /**
- * Phases 3-5: seller payments split to the agent's Connect account (agent pays the platform fee
- * and Stripe's fee), agent withdrawals, refunds and the admin views.
+ * Seller payments go 100% to the platform (the agent's share, after the platform fee and
+ * Stripe's fee, is recorded and withdrawn later by manual bank transfer, see
+ * ManualWithdrawalsTest), refunds, old Stripe Connect payouts, and the admin views.
  */
 class StripeMarketplaceTest extends TestCase
 {
@@ -94,33 +95,34 @@ class StripeMarketplaceTest extends TestCase
         ], self::WEBHOOK_SECRET);
     }
 
-    // --- Phase 3: split payments ---
+    // --- Seller payments: collected by the platform ---
 
-    public function test_seller_cannot_pay_until_the_agent_can_receive_payments(): void
+    public function test_seller_can_pay_before_the_agent_sets_anything_up(): void
     {
         $listing = $this->listing();
 
         $this->actingAs($this->seller)->getJson("/api/listings/{$listing->id}/payment-status")
-            ->assertJsonPath('data.agent_ready', false);
-        $this->actingAs($this->seller)->postJson("/api/listings/{$listing->id}/checkout")->assertStatus(422);
-        $this->assertSame(0, Payment::count());
+            ->assertJsonPath('data.agent_ready', true);
+        $this->actingAs($this->seller)->postJson("/api/listings/{$listing->id}/checkout")->assertOk();
+        $this->assertSame(1, Payment::count());
     }
 
-    public function test_with_zero_platform_fee_the_agent_pays_only_the_stripe_fee(): void
+    public function test_the_whole_payment_goes_to_the_platform_and_the_agent_share_is_recorded(): void
     {
-        $this->makeAgentReady();
         $listing = $this->listing(295.00);
 
         $this->actingAs($this->seller)->postJson("/api/listings/{$listing->id}/checkout")->assertOk();
 
-        // Stripe fee 2.9% + 30c of $295.00 = 855.5 -> 856 + 30 = 886 cents
-        $params = $this->stripe->createdSessions[0];
-        $this->assertSame(886, $params['payment_intent_data']['application_fee_amount']);
-        $this->assertSame('acct_agent_1', $params['payment_intent_data']['transfer_data']['destination']);
+        // No split at payment time: no transfer to an agent account, no application fee
+        $intent = $this->stripe->createdSessions[0]['payment_intent_data'];
+        $this->assertArrayNotHasKey('transfer_data', $intent);
+        $this->assertArrayNotHasKey('application_fee_amount', $intent);
+        $this->assertSame('listing', $intent['metadata']['type']);
 
+        // Stripe fee 2.9% + 30c of $295.00 = 855.5 -> 856 + 30 = 886 cents; agent share 28614
         $this->assertDatabaseHas('payments', [
             'type' => 'listing', 'amount' => 29500, 'platform_fee' => 0, 'processing_fee' => 886,
-            'agent_amount' => 28614, 'destination_account_id' => 'acct_agent_1',
+            'agent_amount' => 28614, 'destination_account_id' => null,
         ]);
     }
 
@@ -136,7 +138,6 @@ class StripeMarketplaceTest extends TestCase
         $this->actingAs($this->seller)->postJson("/api/listings/{$listing->id}/checkout")->assertOk();
 
         // 10% of 29500 = 2950 + 500 fixed = 3450; Stripe 886; agent 29500 - 3450 - 886 = 25164
-        $this->assertSame(3450 + 886, $this->stripe->createdSessions[0]['payment_intent_data']['application_fee_amount']);
         $this->assertDatabaseHas('payments', ['platform_fee' => 3450, 'processing_fee' => 886, 'agent_amount' => 25164]);
     }
 
@@ -167,57 +168,20 @@ class StripeMarketplaceTest extends TestCase
         $this->actingAs($this->seller)->postJson("/api/listings/{$listing->id}/checkout")->assertStatus(422);
     }
 
-    // --- Phase 4: withdrawals ---
+    // --- Old Stripe Connect payouts (made before manual withdrawals) still get status updates ---
 
-    public function test_agent_sees_balance_earnings_and_can_withdraw(): void
+    private function legacyStripePayout(): Payout
     {
-        $this->makeAgentReady();
-        $listing = $this->listing(295.00);
-        $this->actingAs($this->seller)->postJson("/api/listings/{$listing->id}/checkout")->assertOk();
-        $this->payCheckout('cs_test_1', 29500)->assertOk();
-
-        $this->stripe->balances['acct_agent_1'] = ['available' => 28614, 'pending' => 0];
-
-        $this->actingAs($this->agent)->getJson('/api/agent/payouts')
-            ->assertOk()
-            ->assertJsonPath('data.balance.available', 286.14)
-            ->assertJsonPath('data.earnings.sales', 1)
-            ->assertJsonPath('data.earnings.net', 286.14)
-            ->assertJsonPath('data.account.status', 'ready');
-
-        $this->actingAs($this->agent)->postJson('/api/agent/payouts', ['amount' => '200.00'])
-            ->assertCreated()
-            ->assertJsonPath('data.amount', 200)
-            ->assertJsonPath('data.status', 'pending');
-
-        $this->assertSame([['accountId' => 'acct_agent_1', 'amount' => 20000, 'currency' => 'usd']], array_map(
-            fn ($p) => array_intersect_key($p, array_flip(['accountId', 'amount', 'currency'])),
-            $this->stripe->payoutsCreated
-        ));
-        $this->assertDatabaseHas('payouts', ['agent_id' => $this->agent->id, 'amount' => 20000, 'stripe_payout_id' => 'po_test_1']);
-    }
-
-    public function test_withdrawal_rules(): void
-    {
-        // Not set up yet
-        $this->actingAs($this->agent)->postJson('/api/agent/payouts', ['amount' => 10])->assertStatus(422);
-
-        $this->makeAgentReady();
-        $this->stripe->balances['acct_agent_1'] = ['available' => 5000, 'pending' => 9000];
-
-        $this->actingAs($this->agent)->postJson('/api/agent/payouts', ['amount' => 0.5])->assertStatus(422);   // below $1
-        $this->actingAs($this->agent)->postJson('/api/agent/payouts', ['amount' => 60])->assertStatus(422);    // more than available
-        $this->actingAs($this->agent)->postJson('/api/agent/payouts', ['amount' => '10.555'])->assertStatus(422); // 3 decimals
-        $this->assertSame([], $this->stripe->payoutsCreated);
-
-        $this->actingAs($this->seller)->postJson('/api/agent/payouts', ['amount' => 10])->assertForbidden();
+        return Payout::create([
+            'agent_id' => $this->agent->id, 'method' => Payout::METHOD_STRIPE, 'stripe_account_id' => 'acct_agent_1',
+            'stripe_payout_id' => 'po_test_1', 'amount' => 5000, 'currency' => 'usd', 'status' => Payout::STATUS_PENDING,
+        ]);
     }
 
     public function test_payout_webhook_updates_status_only_for_the_matching_account(): void
     {
         $this->makeAgentReady();
-        $this->stripe->balances['acct_agent_1'] = ['available' => 5000, 'pending' => 0];
-        $this->actingAs($this->agent)->postJson('/api/agent/payouts', ['amount' => 50])->assertCreated();
+        $this->legacyStripePayout();
 
         $event = fn (string $type, string $status, string $account, array $extra = []) => [
             'id' => 'evt_'.uniqid(), 'object' => 'event', 'type' => $type, 'account' => $account,
@@ -240,8 +204,7 @@ class StripeMarketplaceTest extends TestCase
     public function test_failed_payout_records_the_reason(): void
     {
         $this->makeAgentReady();
-        $this->stripe->balances['acct_agent_1'] = ['available' => 5000, 'pending' => 0];
-        $this->actingAs($this->agent)->postJson('/api/agent/payouts', ['amount' => 50])->assertCreated();
+        $this->legacyStripePayout();
 
         $this->signed('/api/stripe/connect-webhook', [
             'id' => 'evt_f', 'object' => 'event', 'type' => 'payout.failed', 'account' => 'acct_agent_1',
@@ -254,9 +217,8 @@ class StripeMarketplaceTest extends TestCase
 
     // --- Phase 5: refunds & admin views ---
 
-    public function test_admin_refund_of_a_seller_payment_reverses_the_agent_transfer(): void
+    public function test_admin_refund_of_a_seller_payment_refunds_from_the_platform(): void
     {
-        $this->makeAgentReady();
         $listing = $this->listing(295.00);
         $this->actingAs($this->seller)->postJson("/api/listings/{$listing->id}/checkout")->assertOk();
         $this->payCheckout('cs_test_1', 29500, 'pi_listing')->assertOk();
@@ -264,8 +226,9 @@ class StripeMarketplaceTest extends TestCase
 
         $this->actingAs($this->agent)->postJson("/api/admin/payments/{$payment->id}/refund")->assertForbidden();
 
+        // The platform holds the money, so nothing is pulled back from an agent account
         $this->actingAs($this->admin)->postJson("/api/admin/payments/{$payment->id}/refund")->assertOk();
-        $this->assertSame([['payment_intent' => 'pi_listing', 'reverse_transfer' => true]], $this->stripe->refunds);
+        $this->assertSame([['payment_intent' => 'pi_listing', 'reverse_transfer' => false]], $this->stripe->refunds);
 
         // A second click doesn't refund twice
         $this->actingAs($this->admin)->postJson("/api/admin/payments/{$payment->id}/refund")->assertStatus(422);
@@ -275,6 +238,20 @@ class StripeMarketplaceTest extends TestCase
             'data' => ['object' => ['id' => 'ch_1', 'object' => 'charge', 'refunded' => true, 'payment_intent' => 'pi_listing']],
         ], self::WEBHOOK_SECRET)->assertOk();
         $this->assertSame('refunded', $payment->fresh()->status);
+    }
+
+    public function test_refund_of_an_old_split_payment_still_reverses_the_agent_transfer(): void
+    {
+        $listing = $this->listing(295.00);
+        $payment = Payment::create([
+            'type' => Payment::TYPE_LISTING, 'user_id' => $this->seller->id, 'listing_id' => $listing->id,
+            'service_package_id' => $listing->service_package_id, 'agent_id' => $this->agent->id,
+            'amount' => 29500, 'currency' => 'usd', 'agent_amount' => 28614, 'destination_account_id' => 'acct_agent_1',
+            'status' => Payment::STATUS_PAID, 'stripe_session_id' => 'cs_old', 'stripe_payment_intent_id' => 'pi_old', 'paid_at' => now(),
+        ]);
+
+        $this->actingAs($this->admin)->postJson("/api/admin/payments/{$payment->id}/refund")->assertOk();
+        $this->assertSame([['payment_intent' => 'pi_old', 'reverse_transfer' => true]], $this->stripe->refunds);
     }
 
     public function test_refunded_agent_package_stops_access(): void
@@ -309,11 +286,13 @@ class StripeMarketplaceTest extends TestCase
 
     public function test_admin_sees_fees_agent_accounts_and_withdrawals(): void
     {
-        $this->makeAgentReady();
         $listing = $this->listing(295.00);
         $this->actingAs($this->seller)->postJson("/api/listings/{$listing->id}/checkout")->assertOk();
         $this->payCheckout('cs_test_1', 29500)->assertOk();
-        $this->stripe->balances['acct_agent_1'] = ['available' => 10000, 'pending' => 0];
+        $this->actingAs($this->agent)->putJson('/api/agent/bank-account', [
+            'account_holder_name' => 'Agent', 'bank_name' => 'Chase', 'routing_number' => '021000021',
+            'account_number' => '000123456789', 'account_number_confirmation' => '000123456789', 'account_type' => 'checking',
+        ])->assertOk();
         $this->actingAs($this->agent)->postJson('/api/agent/payouts', ['amount' => 50])->assertCreated();
 
         $this->actingAs($this->admin)->getJson('/api/admin/payments?type=listing')
@@ -324,7 +303,7 @@ class StripeMarketplaceTest extends TestCase
 
         $this->actingAs($this->admin)->getJson('/api/admin/payout-accounts')
             ->assertOk()
-            ->assertJsonFragment(['id' => $this->agent->id, 'payout_status' => 'ready', 'net' => 286.14]);
+            ->assertJsonFragment(['id' => $this->agent->id, 'has_bank_account' => true, 'net' => 286.14, 'pending' => 50, 'available' => 236.14]);
 
         $this->actingAs($this->admin)->getJson('/api/admin/payouts')
             ->assertOk()

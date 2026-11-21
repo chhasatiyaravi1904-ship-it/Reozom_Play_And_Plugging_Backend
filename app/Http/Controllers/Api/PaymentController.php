@@ -76,8 +76,8 @@ class PaymentController extends Controller
             'package' => $servicePackage ? ['id' => $servicePackage->id, 'name' => $servicePackage->name] : null,
             'can_pay' => $request->user()->id === $listing->user_id,
             'payment_available' => $this->stripe->isConfigured(),
-            // Seller payments go to the agent's Stripe account; false until the agent finishes payout setup
-            'agent_ready' => (bool) $servicePackage?->agent?->canReceivePayments(),
+            // The platform collects seller payments, so the agent needs no setup before sellers can pay
+            'agent_ready' => true,
         ]);
     }
 

@@ -41,8 +41,8 @@ class PaymentSettingsController extends Controller
     }
 
     /**
-     * Refund a paid payment through Stripe. For seller payments the agent's share is pulled
-     * back from the agent's account (reverse transfer); the webhook then marks it refunded.
+     * Refund a paid payment through Stripe; the webhook then marks it refunded. For old split
+     * seller payments the agent's share is pulled back from their Stripe account (reverse transfer).
      */
     public function refund(Payment $payment): JsonResponse
     {
@@ -59,7 +59,9 @@ class PaymentSettingsController extends Controller
         try {
             $refundId = $this->stripe->refundPayment(
                 $payment->stripe_payment_intent_id,
-                $payment->type === Payment::TYPE_LISTING,
+                // Only old split payments put money in the agent's Stripe account to pull back;
+                // new ones were collected by the platform (the agent's balance just drops).
+                $payment->type === Payment::TYPE_LISTING && $payment->destination_account_id !== null,
                 "refund-payment-{$payment->id}"
             );
         } catch (ApiErrorException $e) {

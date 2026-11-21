@@ -191,6 +191,12 @@ class User extends Authenticatable implements MustVerifyEmail
      * updating one), so "current" is simply the latest row still in date —
      * no separate status column to keep in sync.
      */
+    /** Where an admin sends this agent's withdrawals (manual bank transfer). */
+    public function bankAccount(): HasOne
+    {
+        return $this->hasOne(AgentBankAccount::class, 'agent_id');
+    }
+
     public function currentAgentPackage(): HasOne
     {
         return $this->hasOne(AgentPackage::class)

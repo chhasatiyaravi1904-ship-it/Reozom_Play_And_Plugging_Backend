@@ -80,4 +80,51 @@ class EmailVerificationTest extends TestCase
 
         $response->assertOk();
     }
+
+    public function test_registration_sends_the_verification_link_to_sellers_and_agents(): void
+    {
+        \Illuminate\Support\Facades\Notification::fake();
+
+        foreach (['seller_buyer' => 'sam@example.com', 'agent' => 'ava@example.com'] as $type => $email) {
+            $this->postJson('/api/auth/register', [
+                'userType' => $type, 'firstName' => 'New', 'lastName' => 'User', 'email' => $email,
+                'phone' => '5555550100', 'streetAddress' => '1 Main St', 'city' => 'Detroit', 'state' => 'MI', 'zip' => '48201',
+                'password' => 'Password123!', 'passwordConfirmation' => 'Password123!',
+            ])->assertCreated();
+
+            \Illuminate\Support\Facades\Notification::assertSentTo(
+                User::where('email', $email)->first(),
+                \App\Notifications\VerifyEmailNotification::class
+            );
+        }
+    }
+
+    public function test_resend_sends_a_new_verification_link_to_every_role(): void
+    {
+        \Illuminate\Support\Facades\Notification::fake();
+        $seller = User::factory()->unverified()->create(['role' => 'seller_buyer']);
+        $agent = User::factory()->unverified()->create(['role' => 'agent']);
+
+        // From the login page (no session) and from the Verify email page (logged in)
+        $this->postJson('/api/auth/email/resend', ['email' => $agent->email])->assertOk();
+        $this->actingAs($seller)->postJson('/api/auth/email/verification-notification')->assertOk();
+
+        foreach ([$seller, $agent] as $user) {
+            \Illuminate\Support\Facades\Notification::assertSentTo($user, \App\Notifications\VerifyEmailNotification::class);
+        }
+        // Agents no longer get the "we're reviewing your application" notice instead of a link
+        \Illuminate\Support\Facades\Notification::assertNotSentTo($agent, \App\Notifications\AgentRegisteredNotification::class);
+    }
+
+    public function test_an_agent_can_verify_with_the_link(): void
+    {
+        $agent = User::factory()->unverified()->create(['role' => 'agent']);
+        $url = URL::temporarySignedRoute('verification.verify', now()->addHour(), [
+            'id' => $agent->id,
+            'hash' => sha1($agent->getEmailForVerification()),
+        ]);
+
+        $this->get($url)->assertRedirect();
+        $this->assertTrue($agent->fresh()->hasVerifiedEmail());
+    }
 }

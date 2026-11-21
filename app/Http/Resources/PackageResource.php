@@ -19,6 +19,8 @@ class PackageResource extends JsonResource
             'name' => $this->name,
             'slug' => $this->slug,
             'description' => $this->description,
+            'includedFeatures' => array_values($this->included_features ?? []),
+            'excludedFeatures' => array_values($this->excluded_features ?? []),
             'price' => $this->price,
             'durationDays' => $this->duration_days,
             'sortOrder' => $this->sort_order,

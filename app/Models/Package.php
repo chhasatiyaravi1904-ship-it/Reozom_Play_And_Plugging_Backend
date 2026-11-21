@@ -23,6 +23,8 @@ class Package extends Model
         'slug',
         'role_name',
         'description',
+        'included_features',
+        'excluded_features',
         'price',
         'duration_days',
         'sort_order',
@@ -38,6 +40,8 @@ class Package extends Model
             'sort_order' => 'integer',
             'is_active' => 'boolean',
             'max_listing_processes' => 'integer',
+            'included_features' => 'array',
+            'excluded_features' => 'array',
         ];
     }
 

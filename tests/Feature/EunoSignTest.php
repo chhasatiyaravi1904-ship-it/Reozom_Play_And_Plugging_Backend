@@ -80,7 +80,8 @@ class EunoSignTest extends TestCase
             'buyer_id' => $buyer->id,
             'offer_amount' => 450000,
             'closing_date' => now()->addDays(30),
-            'status' => 'submitted',
+            // Purchase agreements are signed only after the seller accepts
+            'status' => 'accepted',
         ]);
 
         $response = $this->actingAs($buyer)->postJson("/api/offers/{$offer->id}/euno-sign/initiate");
