@@ -1096,32 +1096,39 @@ HTML;
      */
     private function signatureLinesHtml(array $signers): string
     {
-        $cell = function (int $number, array $signer): string {
-            $tag = '$s'.$number;
-            $pad = str_repeat('&nbsp;', 12);
-            $label = htmlspecialchars($signer['name']).' ('.htmlspecialchars($signer['email']).')';
-
-            // The white "$sN" paragraph is EunoDoc's placement anchor: keep its size/position as is.
-            return '<td style="width:44%;font-size:9.5pt;color:#111111;vertical-align:bottom;">'
-                .'<p style="margin:0;text-align:center;border-bottom:0.5px solid #000;color:#ffffff;font-size:25px;line-height:30px;">'
-                ."{$pad}{$tag}{$pad}</p>"
-                .'<div style="font-size:7.5pt;color:#555555;text-transform:uppercase;letter-spacing:0.5px;">Seller Signature</div>'
-                ."<div style=\"margin-top:3px;\"><strong>{$label}</strong></div>"
-                .'<div style="margin-top:8px;">Date: ______________________</div>'
-                .'</td>';
-        };
-
         $rows = '';
         foreach (array_chunk($signers, 2) as $rowIndex => $pair) {
             $cells = [];
             foreach ($pair as $i => $signer) {
-                $cells[] = $cell($rowIndex * 2 + $i + 1, $signer);
+                $cells[] = self::signatureCellHtml($rowIndex * 2 + $i + 1, 'Seller Signature', $signer);
             }
             $rows .= '<tr>'.implode('<td style="width:12%;"></td>', $cells).'</tr>'
                 .'<tr><td colspan="3" style="height:18px;"></td></tr>';
         }
 
         return '<table style="width:100%;border-collapse:collapse;margin-top:12px;">'.$rows.'</table>';
+    }
+
+    /**
+     * One signature cell. EunoDoc places signer N's field at the white "$sN" tag and draws it
+     * downward (signature + signed-date stamp), so the tag sits above an empty signing space
+     * that ends on the signature line; the role, name and date note stay clear below the line.
+     *
+     * @param  array{name: string, email: string}  $signer
+     */
+    public static function signatureCellHtml(int $number, string $role, array $signer): string
+    {
+        $pad = str_repeat('&nbsp;', 12);
+        $name = htmlspecialchars($signer['name']).' ('.htmlspecialchars($signer['email']).')';
+
+        return '<td style="width:44%;font-size:9.5pt;color:#111111;vertical-align:bottom;">'
+            .'<p style="margin:0;text-align:center;color:#ffffff;font-size:25px;line-height:30px;">'
+            ."{$pad}\$s{$number}{$pad}</p>"
+            .'<div style="height:60px;border-bottom:0.5px solid #000;"></div>'
+            .'<div style="margin-top:3px;font-size:7.5pt;color:#555555;text-transform:uppercase;letter-spacing:0.5px;">'.htmlspecialchars($role).'</div>'
+            ."<div style=\"margin-top:2px;\"><strong>{$name}</strong></div>"
+            .'<div style="margin-top:2px;font-size:7.5pt;color:#777777;">Date is added automatically when signed</div>'
+            .'</td>';
     }
 
     /**
@@ -1201,28 +1208,22 @@ HTML;
         }
 
         $cell = function (?array $signer, string $label): string {
-            if (! $signer) {
-                return '<td style="width:44%;"></td>';
-            }
-            $pad = str_repeat('&nbsp;', 12);
-            $name = htmlspecialchars($signer['name']).' ('.htmlspecialchars($signer['email']).')';
-
-            // The white "$sN" paragraph is EunoDoc's placement anchor for signer N
-            return '<td style="width:44%;font-size:9.5pt;color:#111111;vertical-align:bottom;">'
-                .'<p style="margin:0;text-align:center;border-bottom:0.5px solid #000;color:#ffffff;font-size:25px;line-height:30px;">'
-                ."{$pad}\$s{$signer['number']}{$pad}</p>"
-                ."<div style=\"font-size:7.5pt;color:#555555;text-transform:uppercase;letter-spacing:0.5px;\">{$label}</div>"
-                ."<div style=\"margin-top:3px;\"><strong>{$name}</strong></div>"
-                .'<div style="margin-top:8px;">Date: ______________________</div>'
-                .'</td>';
+            return $signer
+                ? self::signatureCellHtml($signer['number'], $label, $signer)
+                : '<td style="width:44%;"></td>';
         };
 
         $html = '';
         if ($isLead) {
             $initials = function (array $people): string {
+                // Like signatures, EunoDoc draws the initials field downward from the white "$iN"
+                // tag, so the tag sits above an empty box that ends on the initials line.
                 return implode('', array_map(
-                    fn ($p) => '<span style="display:inline-block;min-width:60px;margin-right:6px;border-bottom:0.5px solid #000;text-align:center;color:#ffffff;font-size:16px;">'
-                        ."&nbsp;&nbsp;\$i{$p['number']}&nbsp;&nbsp;</span>",
+                    fn ($p) => '<div style="display:inline-block;width:70px;margin-right:8px;vertical-align:bottom;text-align:center;">'
+                        .'<div style="color:#ffffff;font-size:16px;line-height:18px;">&nbsp;&nbsp;$i'.$p['number'].'&nbsp;&nbsp;</div>'
+                        .'<div style="height:34px;border-bottom:0.5px solid #000;"></div>'
+                        .'<div style="font-size:7pt;color:#777777;text-transform:uppercase;">Initials</div>'
+                        .'</div>',
                     $people
                 ));
             };

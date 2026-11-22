@@ -812,19 +812,9 @@ class OfferController extends Controller
             'additional_signer' => 'Seller Signature',
         ];
 
-        $cell = function (int $number, array $signer) use ($roleLabels): string {
-            $pad = str_repeat('&nbsp;', 12);
-            $label = htmlspecialchars($signer['name']).' ('.htmlspecialchars($signer['email']).')';
-            $role = $roleLabels[$signer['role'] ?? ''] ?? 'Signature';
-
-            return '<td style="width:44%;font-size:9.5pt;color:#111111;vertical-align:bottom;">'
-                .'<p style="margin:0;text-align:center;border-bottom:0.5px solid #000;color:#ffffff;font-size:25px;line-height:30px;">'
-                ."{$pad}\$s{$number}{$pad}</p>"
-                ."<div style=\"font-size:7.5pt;color:#555555;text-transform:uppercase;letter-spacing:0.5px;\">{$role}</div>"
-                ."<div style=\"margin-top:3px;\"><strong>{$label}</strong></div>"
-                .'<div style="margin-top:8px;">Date: ______________________</div>'
-                .'</td>';
-        };
+        $cell = fn (int $number, array $signer): string => ListingDocumentController::signatureCellHtml(
+            $number, $roleLabels[$signer['role'] ?? ''] ?? 'Signature', $signer
+        );
 
         $rows = '';
         foreach (array_chunk($signers, 2) as $rowIndex => $pair) {
