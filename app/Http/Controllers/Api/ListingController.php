@@ -249,17 +249,8 @@ class ListingController extends Controller
             return $unpaid;
         }
 
-        $snapshot = $listing->workflow_snapshot ?? [];
-        $stepsTotal = count($snapshot) > 0 ? count($snapshot) : $listing->steps_total;
-
         // Skip review status and directly publish
-        $listing->update([
-            'status' => 'published',
-            'moderation_status' => 'auto_approved',
-            'steps_completed' => $stepsTotal,
-            'moderated_at' => now(),
-            'status_changed_date' => now(),
-        ]);
+        $listing->publish();
 
         return api_success(new ListingResource($listing), 'Listing published successfully.');
     }
@@ -272,16 +263,7 @@ class ListingController extends Controller
             return $unpaid;
         }
 
-        $snapshot = $listing->workflow_snapshot ?? [];
-        $stepsTotal = count($snapshot) > 0 ? count($snapshot) : $listing->steps_total;
-
-        $listing->update([
-            'status' => 'published',
-            'moderation_status' => 'auto_approved',
-            'steps_completed' => $stepsTotal,
-            'moderated_at' => now(),
-            'status_changed_date' => now(),
-        ]);
+        $listing->publish();
 
         return api_success(new ListingResource($listing), 'Listing published successfully.');
     }

@@ -142,6 +142,22 @@ class Listing extends Model
         return $this->status === 'published' && $this->moderation_status !== 'rejected';
     }
 
+    /**
+     * Publish the listing (auto-approved). Used by submit/publish and when its package payment is confirmed.
+     */
+    public function publish(): void
+    {
+        $snapshot = $this->workflow_snapshot ?? [];
+
+        $this->update([
+            'status' => 'published',
+            'moderation_status' => 'auto_approved',
+            'steps_completed' => count($snapshot) > 0 ? count($snapshot) : $this->steps_total,
+            'moderated_at' => now(),
+            'status_changed_date' => now(),
+        ]);
+    }
+
     public function progressPercent(): int
     {
         if (! $this->steps_total) {

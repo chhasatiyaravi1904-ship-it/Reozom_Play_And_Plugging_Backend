@@ -268,6 +268,42 @@ class StripePaymentTest extends TestCase
         $this->actingAs($this->seller)->postJson("/api/listings/{$listing->id}/checkout")->assertStatus(422);
     }
 
+    public function test_confirmed_listing_payment_publishes_the_listing_once(): void
+    {
+        $listing = $this->listingWithPackage(295.00);
+        $this->actingAs($this->seller)->postJson("/api/listings/{$listing->id}/checkout")->assertOk();
+
+        // Not paid yet: still a draft
+        $this->stripe->sessions['cs_test_1'] = ['status' => 'open', 'payment_status' => 'unpaid'];
+        $this->actingAs($this->seller)->getJson('/api/payments/session/cs_test_1')->assertJsonPath('data.status', 'pending');
+        $this->assertSame('in_progress', $listing->fresh()->status);
+
+        // Return page confirms with Stripe: published, without clicking Submit
+        $this->stripe->sessions['cs_test_1'] = ['status' => 'complete', 'payment_status' => 'paid', 'amount_total' => 29500];
+        $this->actingAs($this->seller)->getJson('/api/payments/session/cs_test_1')->assertJsonPath('data.status', 'paid');
+
+        $published = $listing->fresh();
+        $this->assertSame('published', $published->status);
+        $this->assertSame('auto_approved', $published->moderation_status);
+        $firstPublishedAt = $published->moderated_at;
+
+        // A late webhook for the same session changes nothing
+        $this->travel(5)->minutes();
+        $this->signedWebhook($this->sessionEvent('checkout.session.completed', 'cs_test_1', ['amount_total' => 29500]))->assertOk();
+        $this->assertEquals($firstPublishedAt, $listing->fresh()->moderated_at);
+    }
+
+    public function test_unconfirmed_or_mismatched_listing_payment_does_not_publish(): void
+    {
+        $listing = $this->listingWithPackage(295.00);
+        $this->actingAs($this->seller)->postJson("/api/listings/{$listing->id}/checkout")->assertOk();
+
+        $this->signedWebhook($this->sessionEvent('checkout.session.completed', 'cs_test_1', ['amount_total' => 100]))->assertOk();
+
+        $this->assertSame('failed', Payment::first()->status);
+        $this->assertSame('in_progress', $listing->fresh()->status);
+    }
+
     public function test_free_service_package_needs_no_payment(): void
     {
         $listing = $this->listingWithPackage(null);

@@ -247,6 +247,11 @@ class PaymentService
 
             $payment->save();
 
+            // Paying for the listing's service package publishes it (runs once: paid payments return early above)
+            if ($payment->type === Payment::TYPE_LISTING && $payment->listing) {
+                $payment->listing->publish();
+            }
+
             return $payment;
         });
     }
