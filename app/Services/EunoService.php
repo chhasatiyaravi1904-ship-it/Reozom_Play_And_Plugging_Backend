@@ -390,6 +390,10 @@ class EunoService
      */
     public function cancelAgreement(string $agreementId, int $triedBefore = 0): ?array
     {
+        if ($this->mockMode || str_starts_with($agreementId, 'mock_')) {
+            return ['_id' => $agreementId, 'status' => 'canceled'];
+        }
+
         try {
             $endpoint = rtrim($this->apiUrl, '/') . '/document/' . $agreementId . '/cancel';
             $client = $this->getHttpClient(['timeout' => 15]);
@@ -510,8 +514,9 @@ class EunoService
                 [
                     '_id' => substr(md5('mock_rec_signer_' . $agreementId), 0, 24),
                     'email' => auth()->user()?->email ?? 'signer@reozom.com',
-                    'status' => 'completed',
-                    'signed_at' => now()->toIso8601String(),
+                    // A mock (or the fallback when EunoDoc is unreachable) cannot know who signed.
+                    // Claiming "completed" would skip this user in the signing order.
+                    'status' => 'pending',
                 ]
             ],
         ];

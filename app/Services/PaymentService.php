@@ -250,6 +250,8 @@ class PaymentService
             // Paying for the listing's service package publishes it (runs once: paid payments return early above)
             if ($payment->type === Payment::TYPE_LISTING && $payment->listing) {
                 $payment->listing->publish();
+                // Paid: the full document set (Reozom createDocumentsForListing at payment)
+                app(DisclosureService::class)->provisionDocuments($payment->listing->fresh());
             }
 
             return $payment;

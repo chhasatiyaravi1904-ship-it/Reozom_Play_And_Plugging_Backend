@@ -23,6 +23,7 @@ class DocumentTemplate extends Model
         'requires_signature',
         'order',
         'is_active',
+        'available_before_payment',
     ];
 
     protected $casts = [
@@ -30,6 +31,8 @@ class DocumentTemplate extends Model
         'rules' => 'array',
         'requires_signature' => 'boolean',
         'is_active' => 'boolean',
+        // Reozom "free listing" set: created before the listing's service package is paid
+        'available_before_payment' => 'boolean',
     ];
 
     public function scopeActive(Builder $query): Builder

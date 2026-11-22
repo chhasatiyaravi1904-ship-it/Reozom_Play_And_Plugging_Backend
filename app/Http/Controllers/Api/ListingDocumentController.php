@@ -37,6 +37,9 @@ class ListingDocumentController extends Controller
         'pre_approval_letter'  => ['label' => 'Mortgage Pre-Approval Letter', 'category' => 'supplementary', 'signable' => false],
         'closing_documents'    => ['label' => 'Closing Settlement Statements', 'category' => 'supplementary', 'signable' => false],
         'other'                => ['label' => 'Other Attachment', 'category' => 'supplementary', 'signable' => false],
+        'lead_pamphlet'        => ['label' => 'Protect Your Family From Lead In Your Home', 'category' => 'supplementary', 'signable' => false],
+        'addendum'             => ['label' => 'Addendum to Purchase Agreement', 'category' => 'supplementary', 'signable' => false],
+        'condo_governance_form' => ['label' => 'Condo Governance Form', 'category' => 'supplementary', 'signable' => false],
     ];
 
     /**
@@ -44,6 +47,13 @@ class ListingDocumentController extends Controller
      */
     private function resolveRequirements(Listing $listing): array
     {
+        // Agent listings have no statutory documents to sign, only uploaded files (original Reozom)
+        if ($listing->isAgentListing()) {
+            app(DisclosureService::class)->provisionDocuments($listing);
+
+            return $this->uploadRequirements();
+        }
+
         if ($listing->usesDisclosureSteps()) {
             return $this->generatedRequirements($listing);
         }
@@ -99,22 +109,25 @@ class ListingDocumentController extends Controller
             ];
         }
 
-        $requirements[] = [
-            'id' => 'listing_agreement',
-            'label' => 'Exclusive Right to Sell Listing Agreement',
-            'description' => 'Exclusive brokerage listing agreement with package terms.',
-            'required' => true,
-            'category' => 'statutory',
-            'signable' => true,
-        ];
-        $requirements[] = [
-            'id' => 'agency_disclosure',
-            'label' => 'Agency Disclosure Statement',
-            'description' => 'Real estate agency relationships and fiduciary duties disclosure.',
-            'required' => true,
-            'category' => 'statutory',
-            'signable' => true,
-        ];
+        // Brokerage agreements only once the service package is paid (Reozom "free listing")
+        if (app(\App\Services\PaymentService::class)->listingIsPaid($listing)) {
+            $requirements[] = [
+                'id' => 'listing_agreement',
+                'label' => 'Exclusive Right to Sell Listing Agreement',
+                'description' => 'Exclusive brokerage listing agreement with package terms.',
+                'required' => true,
+                'category' => 'statutory',
+                'signable' => true,
+            ];
+            $requirements[] = [
+                'id' => 'agency_disclosure',
+                'label' => 'Agency Disclosure Statement',
+                'description' => 'Real estate agency relationships and fiduciary duties disclosure.',
+                'required' => true,
+                'category' => 'statutory',
+                'signable' => true,
+            ];
+        }
         return array_merge($requirements, $this->uploadRequirements());
     }
 
@@ -200,6 +213,7 @@ class ListingDocumentController extends Controller
         Gate::authorize('view', $listing);
 
         $requirements = $this->resolveRequirements($listing);
+        app(DisclosureService::class)->attachExtraDocuments($listing);
         $documents = $listing->documents()->get();
         $docsByType = $documents->keyBy('type');
 
@@ -275,7 +289,11 @@ class ListingDocumentController extends Controller
     {
         Gate::authorize('update', $listing);
 
-        $allowedTypes = array_keys(self::REOZOM_DOCUMENT_TYPES);
+        // Types the system adds itself (pamphlet, signed addendum, extra forms) are not upload choices
+        $allowedTypes = array_values(array_diff(
+            array_keys(self::REOZOM_DOCUMENT_TYPES),
+            ['lead_pamphlet', 'addendum', ...DisclosureService::EXTRA_DOCUMENT_TYPES]
+        ));
 
         $request->validate([
             'document_id' => ['required', 'string', Rule::in($allowedTypes)],
@@ -420,11 +438,36 @@ class ListingDocumentController extends Controller
     /**
      * Serve document either inline (for in-browser PDF viewing in new tab) or as attachment (direct download).
      */
+    /**
+     * Reozom emails the seller when someone else (agent, admin) opens one of their uploaded
+     * documents. At most one email per viewer and listing per hour, and a mail failure never
+     * blocks the download.
+     */
+    private function notifyOwnerOfView(Request $request, Listing $listing, ListingDocument $document): void
+    {
+        $viewer = $request->user();
+        $owner = $listing->user;
+        $isUploaded = $document->document_template_id === null
+            && ! in_array($document->type, DisclosureService::STATUTORY_DOCUMENT_TYPES, true);
+
+        if (! $isUploaded || ! $owner || ! $viewer || $viewer->id === $owner->id
+            || ! \Illuminate\Support\Facades\Cache::add("documents-viewed:{$listing->id}:{$viewer->id}", true, now()->addHour())) {
+            return;
+        }
+
+        try {
+            $owner->notify(new \App\Notifications\DocumentsViewedNotification($listing, $viewer));
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('Documents-viewed email failed.', ['listing_id' => $listing->id, 'error' => $e->getMessage()]);
+        }
+    }
+
     protected function serveDocument(Request $request, Listing $listing, $documentId, bool $isInline)
     {
         Gate::authorize('view', $listing);
 
         $document = $this->findOrProvisionDocument($listing, $documentId);
+        $this->notifyOwnerOfView($request, $listing, $document);
 
         $filename = $document->original_name;
         if (!str_ends_with(strtolower($filename), '.pdf') && !str_ends_with(strtolower($filename), '.html')) {
@@ -502,6 +545,10 @@ class ListingDocumentController extends Controller
         // Generated documents are managed by the system (deleting would lose signatures and they are re-created anyway)
         if ($document->document_template_id !== null) {
             return api_error('Generated documents cannot be deleted. They are updated automatically from the listing answers.', 422);
+        }
+        // Reozom "Extra Documents" can be viewed and emailed, not removed
+        if (in_array($document->type, DisclosureService::EXTRA_DOCUMENT_TYPES, true)) {
+            return api_error('This form is provided with the listing and cannot be deleted.', 422);
         }
 
         if (Storage::disk('local')->exists($document->path)) {
@@ -707,7 +754,12 @@ class ListingDocumentController extends Controller
     /**
      * Render Reozom-style formatted statutory documents.
      */
-    private function renderStatutoryHtml(Listing $listing, ListingDocument $document, array $answers): string
+    /**
+     * @param  array<int, array{name: string, email: string, role: string}>|null  $offerSigners  purchase agreement
+     *         signers (in signing order); when given, the document is rendered for the offer packet with
+     *         buyer/seller lines numbered like the purchase agreement (original Reozom pdf.offers views)
+     */
+    private function renderStatutoryHtml(Listing $listing, ListingDocument $document, array $answers, ?array $offerSigners = null): string
     {
         $addressAns = $listing->answers()->where('step_id', 'step_property_type_address')->first();
         $addrVals = is_array($addressAns?->values) ? $addressAns->values : [];
@@ -722,9 +774,11 @@ class ListingDocumentController extends Controller
         $refCode = htmlspecialchars($listing->reference_code);
         $date = now()->format('F j, Y');
 
-        $signatureBlock = $this->signatureLinesHtml($listing->eSignSigners());
+        $signatureBlock = $offerSigners !== null
+            ? $this->offerDisclosureSignatureHtml($offerSigners, self::isLeadDisclosure($document))
+            : $this->signatureLinesHtml($listing->eSignSigners());
 
-        if ($document->status === 'signed' && $document->signed_at) {
+        if ($offerSigners === null && $document->status === 'signed' && $document->signed_at) {
             $signedOn = $document->signed_at->format('M d, Y');
             $signatureBlock .= "<p style=\"font-size:11px;color:#334155;margin-top:8px;\">Signed electronically via EunoDoc on {$signedOn}. The signed copy is available from the Documents page.</p>";
         }
@@ -1079,6 +1133,12 @@ HTML;
             return null;
         }
 
+        // This document's own signed pages (packet split after signing), as in Reozom
+        $own = $document->audit_trail['signed_file_path'] ?? null;
+        if ($own && Storage::disk('local')->exists($own)) {
+            return $own;
+        }
+
         $agreementId = $document->audit_trail['listing_euno_agreement_id'] ?? null;
         $path = $agreementId ? \App\Models\ListingEunoAgreement::find($agreementId)?->signed_file_path : null;
 
@@ -1088,12 +1148,109 @@ HTML;
     /**
      * Unsigned PDF of a generated document, as sent to EunoDoc for signing.
      */
-    public function renderPdf(Listing $listing, ListingDocument $document): string
+    /**
+     * @param  array<int, array{name: string, email: string, role: string}>|null  $offerSigners  see renderStatutoryHtml()
+     */
+    public function renderPdf(Listing $listing, ListingDocument $document, ?array $offerSigners = null): string
     {
         $answers = app(DisclosureService::class)->getAnswers($listing);
-        $html = $this->renderStatutoryHtml($listing, $document, $answers);
+        $html = $this->renderStatutoryHtml($listing, $document, $answers, $offerSigners);
 
         return $this->htmlToPdf($html);
+    }
+
+    public static function isLeadDisclosure(ListingDocument $document): bool
+    {
+        return $document->type === 'lead_disclosure' || str_ends_with((string) $document->type, '_lead');
+    }
+
+    /**
+     * Seller's/Lead disclosure documents of the listing that go into the purchase agreement packet
+     * (original Reozom adds the Lead and Seller's Disclosure to the PA): disclosure-sourced generated
+     * documents, or the legacy sellers/lead/condo statutory documents.
+     */
+    public function offerDisclosureDocuments(Listing $listing): \Illuminate\Support\Collection
+    {
+        app(DisclosureService::class)->provisionDocuments($listing);
+
+        return $listing->documents()->with('template')->get()
+            ->filter(fn (ListingDocument $doc) => $doc->template
+                ? $doc->template->source === \App\Models\DocumentTemplate::SOURCE_DISCLOSURE
+                : in_array($doc->type, ['sellers_disclosure', 'lead_disclosure', 'condo_disclosure'], true))
+            ->values();
+    }
+
+    /**
+     * Offer-packet signature area, as in Reozom's pdf.offers views: only buyers and sellers sign the
+     * disclosures, each keeping their purchase-agreement number ($sN). Rows pair Buyer N with Seller N.
+     * The Lead Disclosure also gets the acknowledgement initials ($iN) of every seller and buyer.
+     *
+     * @param  array<int, array{name: string, email: string, role: string}>  $signers  in purchase agreement order
+     */
+    private function offerDisclosureSignatureHtml(array $signers, bool $isLead): string
+    {
+        $buyers = [];
+        $sellers = [];
+        foreach (array_values($signers) as $index => $signer) {
+            $entry = $signer + ['number' => $index + 1];
+            if (($signer['role'] ?? '') === 'buyer') {
+                $buyers[] = $entry;
+            } elseif (in_array($signer['role'] ?? '', ['seller', 'additional_signer'], true)) {
+                $sellers[] = $entry;
+            }
+        }
+
+        $cell = function (?array $signer, string $label): string {
+            if (! $signer) {
+                return '<td style="width:44%;"></td>';
+            }
+            $pad = str_repeat('&nbsp;', 12);
+            $name = htmlspecialchars($signer['name']).' ('.htmlspecialchars($signer['email']).')';
+
+            // The white "$sN" paragraph is EunoDoc's placement anchor for signer N
+            return '<td style="width:44%;font-size:9.5pt;color:#111111;vertical-align:bottom;">'
+                .'<p style="margin:0;text-align:center;border-bottom:0.5px solid #000;color:#ffffff;font-size:25px;line-height:30px;">'
+                ."{$pad}\$s{$signer['number']}{$pad}</p>"
+                ."<div style=\"font-size:7.5pt;color:#555555;text-transform:uppercase;letter-spacing:0.5px;\">{$label}</div>"
+                ."<div style=\"margin-top:3px;\"><strong>{$name}</strong></div>"
+                .'<div style="margin-top:8px;">Date: ______________________</div>'
+                .'</td>';
+        };
+
+        $html = '';
+        if ($isLead) {
+            $initials = function (array $people): string {
+                return implode('', array_map(
+                    fn ($p) => '<span style="display:inline-block;min-width:60px;margin-right:6px;border-bottom:0.5px solid #000;text-align:center;color:#ffffff;font-size:16px;">'
+                        ."&nbsp;&nbsp;\$i{$p['number']}&nbsp;&nbsp;</span>",
+                    $people
+                ));
+            };
+            $rows = [
+                ['Seller has disclosed all known lead-based paint and/or lead-based paint hazards and provided all available records and reports.', $sellers],
+                ['Purchaser has received copies of all information listed above.', $buyers],
+                ['Purchaser has received the pamphlet "Protect Your Family From Lead In Your Home".', $buyers],
+                ['Purchaser has received a 10-day opportunity (or mutually agreed period) to conduct a risk assessment or inspection, or has waived it.', $buyers],
+            ];
+            $html .= '<h2>Acknowledgements (initials)</h2><table style="width:100%;border-collapse:collapse;font-size:10pt;margin-bottom:12px;">';
+            foreach ($rows as [$text, $people]) {
+                if ($people === []) {
+                    continue;
+                }
+                $html .= '<tr><td style="padding:6px 8px 6px 0;width:42%;vertical-align:bottom;">'.$initials($people).'</td>'
+                    .'<td style="padding:6px 0;color:#334155;">'.htmlspecialchars($text).'</td></tr>';
+            }
+            $html .= '</table>';
+        }
+
+        $html .= '<table style="width:100%;border-collapse:collapse;margin-top:12px;">';
+        for ($i = 0, $n = max(count($buyers), count($sellers)); $i < $n; $i++) {
+            $html .= '<tr>'.$cell($buyers[$i] ?? null, 'Buyer Signature').'<td style="width:12%;"></td>'
+                .$cell($sellers[$i] ?? null, 'Seller Signature').'</tr>'
+                .'<tr><td colspan="3" style="height:18px;"></td></tr>';
+        }
+
+        return $html.'</table>';
     }
 
     /**

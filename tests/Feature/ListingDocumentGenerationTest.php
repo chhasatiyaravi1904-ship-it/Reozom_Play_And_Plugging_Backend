@@ -76,7 +76,7 @@ class ListingDocumentGenerationTest extends TestCase
         $this->assertNotContains('fl_res_condo_disclosure', $codes);
     }
 
-    public function test_condo_gets_condo_document_and_no_sf_hoa_or_lead_for_newer_homes(): void
+    public function test_condo_gets_condo_document_and_no_sf_or_hoa_but_lead_even_for_newer_homes(): void
     {
         $listing = $this->flListing();
         $this->saveStep($listing, 'step_property_type_address', ['property_sub_type' => '2']);
@@ -87,7 +87,8 @@ class ListingDocumentGenerationTest extends TestCase
         $this->assertContains('fl_res_condo_disclosure', $codes);
         $this->assertNotContains('fl_res_sf_disclosure', $codes);
         $this->assertNotContains('fl_res_hoa', $codes);
-        $this->assertNotContains('fl_res_lead', $codes);
+        // Reozom creates the Lead Disclosure for every FL residential listing, whatever the year built
+        $this->assertContains('fl_res_lead', $codes);
     }
 
     public function test_trust_non_owner_occupied_skips_disclosure_steps_and_documents(): void

@@ -9,7 +9,8 @@ use Illuminate\Database\Seeder;
  * Document sets per state and property type, matching the original Reozom
  * (Services/Listings/{State}/{Type}/DocumentsService):
  *  - FL Residential: SF Disclosure, Condo Disclosure, Mold, HOA, Lead, Radon, Listing Agreement, Services Provided, Agency Disclosure
- *  - MI Residential: Lead, Listing Agreement, Real Estate Disclosure, Seller's Disclosure, Services Provided, GRAR
+ *  - MI Residential: Lead, Listing Agreement, Real Estate Disclosure, Seller's Disclosure, Services Provided
+ *    (GRAR exists in Reozom but is never created, so its template is inactive)
  *  - FL / MI Vacant Land: Listing Agreement, Real Estate Disclosure, Seller's Disclosure, Services Provided
  *
  * Disclosure documents are rendered from the listing's own disclosure steps (including questions an
@@ -29,8 +30,9 @@ class DocumentTemplateSeeder extends Seeder
     public function run(): void
     {
         $notTrust = ['not' => self::TRUST_NON_OWNER];
-        // Federal lead disclosure: homes built before 1978 (or year unknown)
-        $lead = ['all' => [$notTrust, ['any' => [['field' => 'year_built', 'lt' => 1978], ['field' => 'year_built', 'empty' => true]]]]];
+        // Reozom creates the Lead Disclosure for every MI/FL residential listing (whatever the year built),
+        // except trust-owned, non-owner-occupied properties
+        $lead = $notTrust;
 
         $templates = [
             // Florida – Residential
@@ -78,11 +80,26 @@ class DocumentTemplateSeeder extends Seeder
             $this->static('mi_land_real_estate_disclosure', 'Disclosure Regarding Real Estate Agency Relationships', 'MI', 'vacant_land', 2, $notTrust,
                 'This disclosure describes the agency relationship between the Seller, {{seller_name}}, and the brokerage for the land at {{property_address}}.'),
             $this->disclosure('mi_land_sellers_disclosure', "Seller's Disclosure – Vacant Land", 'MI', 'vacant_land', ['mi_vacant_land_disclosure'], 3),
-            $this->static('mi_land_services_provided', 'Services Provided Agreement', 'MI', 'vacant_land', 4, null,
+            // Reozom: a non-owner-occupied trust keeps only the Listing Agreement for MI vacant land
+            $this->static('mi_land_services_provided', 'Services Provided Agreement', 'MI', 'vacant_land', 4, $notTrust,
                 'This agreement describes the services included in the {{package_name}} package for the land at {{property_address}}.'),
         ];
 
+        // Reozom "free listing" documents: the disclosures, created before the listing is paid.
+        // Everything else (listing agreement, services provided, agency) is created once it is paid.
+        $beforePayment = [
+            'fl_res_sf_disclosure', 'fl_res_condo_disclosure', 'fl_res_mold', 'fl_res_hoa', 'fl_res_lead', 'fl_res_radon',
+            'mi_res_lead', 'mi_res_sellers_disclosure',
+            'fl_land_sellers_disclosure', 'mi_land_sellers_disclosure',
+        ];
+        // Defined in Reozom but never created for a listing
+        $neverCreated = ['mi_res_grar'];
+
         foreach ($templates as $template) {
+            $template['available_before_payment'] = in_array($template['code'], $beforePayment, true);
+            if (in_array($template['code'], $neverCreated, true)) {
+                $template['is_active'] = false;
+            }
             DocumentTemplate::updateOrCreate(['code' => $template['code']], $template);
         }
     }

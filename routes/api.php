@@ -145,6 +145,16 @@ Route::middleware('auth:sanctum')->group(function () {
     // Manage Documents: all documents the user can access, across listings
     Route::get('documents', [\App\Http\Controllers\Api\ManageDocumentsController::class, 'index'])->name('documents.index');
 
+    // My Documents: the user's own library, files not tied to a listing (original Reozom AllDocument)
+    Route::controller(\App\Http\Controllers\Api\UserDocumentController::class)->prefix('me/documents')->group(function () {
+        Route::get('/', 'index')->name('me.documents.index');
+        Route::post('/', 'store')->middleware('throttle:30,1')->name('me.documents.store');
+        Route::put('{document}', 'rename')->name('me.documents.rename');
+        Route::delete('{document}', 'destroy')->name('me.documents.destroy');
+        Route::get('{document}/download', 'download')->name('me.documents.download');
+        Route::post('{document}/send-email', 'sendToEmail')->middleware('throttle:10,1')->name('me.documents.send-email');
+    });
+
     Route::controller(\App\Http\Controllers\Api\ListingDocumentController::class)->prefix('listings')->group(function () {
         Route::get('{listing}/documents', 'index')->name('listings.documents.index');
         Route::post('{listing}/documents', 'store')->name('listings.documents.store');
@@ -372,7 +382,17 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('listings/{listing}/euno-sign/initiate', 'initiateListingSigning')->name('listings.euno-sign.initiate');
         Route::get('listings/{listing}/euno-sign/status', 'getListingSigningStatus')->name('listings.euno-sign.status');
         Route::post('offers/{offer}/euno-sign/initiate', 'initiateOfferSigning')->name('offers.euno-sign.initiate');
+        Route::post('offers/{offer}/euno-sign/resend', 'resendOfferSigning')
+            ->middleware('throttle:10,1')->name('offers.euno-sign.resend');
         Route::get('offers/{offer}/euno-sign/status', 'getOfferSigningStatus')->name('offers.euno-sign.status');
+    });
+
+    // Addendum/Amendment to an accepted purchase agreement (original Reozom Addendum)
+    Route::controller(\App\Http\Controllers\Api\OfferAddendumController::class)->group(function () {
+        Route::get('offers/{offer}/addendums', 'index')->name('offers.addendums.index');
+        Route::post('offers/{offer}/addendums', 'store')->middleware('throttle:10,1')->name('offers.addendums.store');
+        Route::post('offers/{offer}/addendums/{addendum}/sign', 'sign')->name('offers.addendums.sign');
+        Route::delete('offers/{offer}/addendums/{addendum}', 'destroy')->name('offers.addendums.destroy');
     });
 });
 

@@ -146,6 +146,50 @@ class ListingOffer extends Model
     }
 
     /**
+     * Purchase agreement signers in the original Reozom order (OffersService::sendPurchaseAgreementOutForSignature):
+     * listing agent (when an agent owns the listing), selling agent (when an agent sent the offer),
+     * buyer (when not an agent), the other purchasers, the seller (titled owner), then the listing's
+     * additional signers. Duplicate emails are dropped; the order matches the $sN tags on the PDF.
+     *
+     * @return array<int, array{name: string, email: string, role: string}>
+     */
+    public function eSignSigners(): array
+    {
+        $this->loadMissing(['listing.user', 'buyer', 'purchasers']);
+
+        $signers = [];
+        $add = function (?string $name, ?string $email, string $role) use (&$signers) {
+            $email = strtolower(trim((string) $email));
+            if (! filter_var($email, FILTER_VALIDATE_EMAIL) || isset($signers[$email])) {
+                return;
+            }
+            $signers[$email] = ['name' => trim((string) $name) ?: $email, 'email' => $email, 'role' => $role];
+        };
+        $fullName = fn (?User $u) => $u ? (trim("{$u->first_name} {$u->last_name}") ?: (string) $u->name) : null;
+
+        $listingUser = $this->listing?->user;
+        if ($listingUser?->isAgent()) {
+            $add($fullName($listingUser), $listingUser->email, 'listing_agent');
+        }
+
+        if ($this->buyer?->isAgent()) {
+            $add($fullName($this->buyer), $this->buyer->email, 'selling_agent');
+        } elseif ($this->buyer) {
+            $add($fullName($this->buyer), $this->buyer->email, 'buyer');
+        }
+
+        foreach ($this->purchasers as $purchaser) {
+            $add(trim("{$purchaser->first_name} {$purchaser->last_name}"), $purchaser->email, 'buyer');
+        }
+
+        foreach ($this->listing?->ownerSigners() ?? [] as $index => $owner) {
+            $add($owner['name'], $owner['email'], $index === 0 ? 'seller' : 'additional_signer');
+        }
+
+        return array_values($signers);
+    }
+
+    /**
      * Get the offer's bottom line offer calculated from offer amount minus closing costs / seller concessions.
      * Replicates Reozom: ListingOffer::getBottomLineOfferAttribute
      */

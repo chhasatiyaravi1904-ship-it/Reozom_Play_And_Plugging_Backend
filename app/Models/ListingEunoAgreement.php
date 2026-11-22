@@ -24,6 +24,7 @@ class ListingEunoAgreement extends Model
         'signers',
         'coordinates',
         'source_file_paths',
+        'document_pages',
         'signed_file_path',
         'audit_file_path',
         'sent_at',
@@ -34,6 +35,8 @@ class ListingEunoAgreement extends Model
         'signers' => 'array',
         'coordinates' => 'array',
         'source_file_paths' => 'array',
+        // {listing_document_id: page count}, in packet order
+        'document_pages' => 'array',
         'sent_at' => 'datetime',
         'completed_at' => 'datetime',
     ];

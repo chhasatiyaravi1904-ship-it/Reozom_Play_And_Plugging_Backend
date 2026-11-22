@@ -164,6 +164,8 @@ class ReozomDigitalSignatureTest extends TestCase
 
     public function test_initiate_sends_all_signers_and_only_unsigned_documents(): void
     {
+        // Nothing left to pay, so the full document set exists (before payment only disclosures do)
+        $this->listing->servicePackage->update(['price' => null]);
         $this->setOwnerAnswers([
             'owner_type' => 'private',
             'owner_type_name' => 'John Owner',

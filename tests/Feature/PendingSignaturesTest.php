@@ -60,6 +60,13 @@ class PendingSignaturesTest extends TestCase
     public function test_each_signer_sees_the_agreement_with_their_own_link(): void
     {
         $agreement = $this->agreement();
+        // Bound before the first request: the route keeps its controller (and EunoService) afterwards
+        $ownerStatus = 'pending';
+        $this->fakeEuno(function ($mock) use (&$ownerStatus) {
+            $mock->shouldReceive('getDocumentUrl')->andReturnUsing(function () use (&$ownerStatus) {
+                return ['recipients' => [['_id' => 'r-owner', 'email' => 'owner@example.com', 'status' => $ownerStatus]]];
+            });
+        });
 
         $owner = $this->pending($this->seller);
         $owner->assertJsonPath('data.count', 1)
@@ -69,7 +76,11 @@ class PendingSignaturesTest extends TestCase
             ->assertJsonPath('data.items.0.document_count', 2);
         $this->assertStringEndsWith('/esign/mock_abc123/r-owner', $owner->json('data.items.0.signing_url'));
 
-        // Email match is case-insensitive; the co-owner gets their own recipient link
+        // Reozom signing order: the owner signs first, so the co-owner has nothing to sign yet
+        $this->pending($this->coOwner)->assertJsonPath('data.count', 0);
+
+        // Once the owner has signed, the co-owner (email matched case-insensitively) gets their own link
+        $ownerStatus = 'completed';
         $co = $this->pending($this->coOwner);
         $co->assertJsonPath('data.count', 1);
         $this->assertStringEndsWith('/esign/mock_abc123/r-co', $co->json('data.items.0.signing_url'));
@@ -84,18 +95,28 @@ class PendingSignaturesTest extends TestCase
         $this->pending($stranger)->assertJsonPath('data.count', 0)->assertJsonPath('data.items', []);
     }
 
-    public function test_completed_canceled_and_offer_agreements_are_not_listed(): void
+    public function test_completed_and_canceled_agreements_are_not_listed(): void
     {
         $this->agreement(['status' => 'completed']);
         $this->agreement(['status' => 'canceled']);
-        $offer = \App\Models\ListingOffer::create([
-            'listing_id' => $this->listing->id, 'buyer_id' => $this->coOwner->id,
-            'status' => \App\Models\ListingOffer::STATUS_SUBMITTED, 'offer_amount' => 1000,
-            'closing_date' => now()->addDays(30)->toDateString(),
-        ]);
-        $this->agreement(['listing_offer_id' => $offer->id]);
 
         $this->pending($this->seller)->assertJsonPath('data.count', 0);
+    }
+
+    public function test_open_purchase_agreement_is_listed_for_a_party_who_has_not_signed(): void
+    {
+        // Like Reozom's dashboard: purchase agreements are listed too (all parties sign at once)
+        $offer = \App\Models\ListingOffer::create([
+            'listing_id' => $this->listing->id, 'buyer_id' => $this->coOwner->id,
+            'status' => \App\Models\ListingOffer::STATUS_ACCEPTED, 'offer_amount' => 1000,
+            'closing_date' => now()->addDays(30)->toDateString(),
+        ]);
+        $this->agreement(['listing_offer_id' => $offer->id, 'document_type' => 'purchase_agreement']);
+
+        $this->pending($this->seller)
+            ->assertJsonPath('data.count', 1)
+            ->assertJsonPath('data.items.0.kind', 'purchase_agreement')
+            ->assertJsonPath('data.items.0.offer_id', $offer->id);
     }
 
     public function test_requires_login(): void

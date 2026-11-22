@@ -156,6 +156,9 @@ class Listing extends Model
             'moderated_at' => now(),
             'status_changed_date' => now(),
         ]);
+
+        // Reozom adds the EPA lead pamphlet when a pre-1978 residential listing is finished
+        app(\App\Services\DisclosureService::class)->attachLeadPamphlet($this);
     }
 
     public function progressPercent(): int
@@ -196,7 +199,31 @@ class Listing extends Model
      *
      * @return array<int, array{name: string, email: string}>
      */
+    /**
+     * Listing created by an agent. As in the original Reozom, these listings have no
+     * statutory listing documents, so nobody signs listing documents for them.
+     */
+    public function isAgentListing(): bool
+    {
+        return (bool) $this->user?->isAgent();
+    }
+
+    /**
+     * Listing-document signers in signing order: the titled owner first, then the additional
+     * signers (Reozom sends them out one after another in this order). None for agent listings.
+     */
     public function eSignSigners(): array
+    {
+        return $this->isAgentListing() ? [] : $this->ownerSigners();
+    }
+
+    /**
+     * The titled owner (owner-type name/email, falling back to the account user) followed by
+     * the additional signers, without duplicate emails. Also the seller side of a purchase agreement.
+     *
+     * @return array<int, array{name: string, email: string}>
+     */
+    public function ownerSigners(): array
     {
         // The address step holds the owner fields; other steps are only a fallback.
         $values = [];

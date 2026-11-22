@@ -43,7 +43,7 @@ class OfferService
             ]);
         }
 
-        return DB::transaction(function () use ($listing, $buyer, $data, $documents, $normalizedListingStatus) {
+        $offer = DB::transaction(function () use ($listing, $buyer, $data, $documents, $normalizedListingStatus) {
             $isBackup = in_array($normalizedListingStatus, ['under_contract', 'ccs'], true);
 
             // Parse deadline: supports integer hours (e.g. 24, 48) or datetime string
@@ -218,6 +218,38 @@ class OfferService
 
             return $offer->load(['actions', 'documents', 'purchasers']);
         });
+
+        $this->sendLeadPamphlet($offer, $listing, $buyer);
+
+        return $offer;
+    }
+
+    /**
+     * Reozom emails the EPA lead pamphlet to the buyer (or their agent) and every purchaser when an
+     * offer is made on a home built before 1978. A mail failure never blocks the offer.
+     */
+    private function sendLeadPamphlet(ListingOffer $offer, Listing $listing, User $buyer): void
+    {
+        $yearBuilt = $listing->answerValue('year_built');
+        if (! is_numeric($yearBuilt) || (int) $yearBuilt >= 1978 || ! is_file(resource_path('documents/lead-pamphlet.pdf'))) {
+            return;
+        }
+
+        try {
+            $notification = new \App\Notifications\LeadPamphletNotification($offer);
+            $buyer->notify($notification);
+
+            $sent = [strtolower((string) $buyer->email)];
+            foreach ($offer->purchasers as $purchaser) {
+                $email = strtolower(trim((string) $purchaser->email));
+                if (filter_var($email, FILTER_VALIDATE_EMAIL) && ! in_array($email, $sent, true)) {
+                    \Illuminate\Support\Facades\Notification::route('mail', $email)->notify($notification);
+                    $sent[] = $email;
+                }
+            }
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('Lead pamphlet email failed.', ['offer_id' => $offer->id, 'error' => $e->getMessage()]);
+        }
     }
 
     /**
@@ -369,7 +401,7 @@ class OfferService
      */
     public function acceptOffer(ListingOffer $offer, User $actor, ?string $comment = null): ListingOffer
     {
-        return DB::transaction(function () use ($offer, $actor, $comment) {
+        $accepted = DB::transaction(function () use ($offer, $actor, $comment) {
             /** @var ListingOffer $lockedOffer */
             $lockedOffer = ListingOffer::where('id', $offer->id)->lockForUpdate()->firstOrFail();
             /** @var Listing $lockedListing */
@@ -470,6 +502,34 @@ class OfferService
 
             return $lockedOffer->load(['actions', 'documents', 'purchasers']);
         });
+
+        // Reozom sends a new purchase agreement on every acceptance: close any open one so the next
+        // Sign creates it with the accepted terms (outside the transaction: EunoDoc is an HTTP call)
+        $this->cancelOpenPurchaseAgreements($accepted);
+
+        return $accepted;
+    }
+
+    /**
+     * Cancel the offer's open purchase agreement(s) on EunoDoc and locally. A failed EunoDoc
+     * cancel is logged; the local agreement is still closed so a new one can be sent.
+     */
+    public function cancelOpenPurchaseAgreements(ListingOffer $offer): void
+    {
+        $euno = app(\App\Services\EunoService::class);
+
+        \App\Models\ListingEunoAgreement::where('listing_offer_id', $offer->id)
+            ->where('document_type', 'purchase_agreement')
+            ->where('status', 'inprogress')
+            ->get()
+            ->each(function (\App\Models\ListingEunoAgreement $agreement) use ($euno) {
+                if ($agreement->agreement_id && $euno->cancelAgreement($agreement->agreement_id) === null) {
+                    \Illuminate\Support\Facades\Log::warning('EunoDoc cancel failed; closing the agreement locally.', [
+                        'listing_euno_agreement_id' => $agreement->id,
+                    ]);
+                }
+                $agreement->update(['status' => 'canceled']);
+            });
     }
 
     /**

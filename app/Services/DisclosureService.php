@@ -526,6 +526,12 @@ class DisclosureService
      */
     public function regenerateStatutoryDocuments(Listing $listing, ?array $selectedCodes = null): void
     {
+        if ($listing->isAgentListing()) {
+            $this->removeUnsignedListingDocuments($listing);
+
+            return;
+        }
+
         $selectedCodes = $selectedCodes ?? $this->getSelectedDisclosureCodes($listing);
 
         $statutoryDefs = [];
@@ -565,17 +571,19 @@ class DisclosureService
             ];
         }
 
-        // Standard brokerage listing agreements (always included with package)
-        $statutoryDefs[] = [
-            'type' => 'listing_agreement',
-            'name' => 'Exclusive Right to Sell Listing Agreement',
-            'description' => 'Exclusive listing agreement with brokerage, package terms, and commission specifications.',
-        ];
-        $statutoryDefs[] = [
-            'type' => 'agency_disclosure',
-            'name' => 'Agency Disclosure Statement',
-            'description' => 'Disclosure Regarding Real Estate Agency Relationships and duties.',
-        ];
+        // Brokerage agreements: only once the service package is paid (Reozom "free listing" has disclosures only)
+        if ($this->listingIsPaid($listing)) {
+            $statutoryDefs[] = [
+                'type' => 'listing_agreement',
+                'name' => 'Exclusive Right to Sell Listing Agreement',
+                'description' => 'Exclusive listing agreement with brokerage, package terms, and commission specifications.',
+            ];
+            $statutoryDefs[] = [
+                'type' => 'agency_disclosure',
+                'name' => 'Agency Disclosure Statement',
+                'description' => 'Disclosure Regarding Real Estate Agency Relationships and duties.',
+            ];
+        }
 
         foreach ($statutoryDefs as $def) {
             $existing = $listing->documents()->where('type', $def['type'])->first();
@@ -601,6 +609,11 @@ class DisclosureService
         if (!empty($unselectedTypes)) {
             $listing->documents()->whereIn('type', $unselectedTypes)->delete();
         }
+        // Agreements created before this rule on a still-unpaid listing (signed ones are kept)
+        $listing->documents()
+            ->whereIn('type', array_diff(['listing_agreement', 'agency_disclosure'], $activeStatutoryTypes))
+            ->where('status', '!=', 'signed')
+            ->delete();
     }
 
     /**
@@ -632,6 +645,13 @@ class DisclosureService
 
         $activeDisclosureCodes = ListingProcess::disclosureCodesFromConfig($listing->activeSteps($values));
 
+        // Reozom "free listing": until the service package is paid only the disclosure documents are
+        // created (none at all for MI residential new construction); the full set once it is paid
+        $beforePayment = ! $this->listingIsPaid($listing);
+        if ($beforePayment && $group === 'residential' && $listing->getStateCode() === 'MI' && $this->isNewConstruction($values)) {
+            return collect();
+        }
+
         return DocumentTemplate::active()
             ->for($listing->getStateCode(), $group)
             ->orderBy('order')
@@ -640,7 +660,90 @@ class DisclosureService
             ->filter(fn (DocumentTemplate $t) => ListingProcess::conditionMatches($t->rules, $values))
             ->filter(fn (DocumentTemplate $t) => $t->source !== DocumentTemplate::SOURCE_DISCLOSURE
                 || array_intersect((array) $t->disclosure_codes, $activeDisclosureCodes) !== [])
+            ->filter(fn (DocumentTemplate $t) => ! $beforePayment || $t->available_before_payment)
             ->values();
+    }
+
+    /** Free or package-less listings count as paid, as in PaymentService. */
+    private function listingIsPaid(Listing $listing): bool
+    {
+        return app(PaymentService::class)->listingIsPaid($listing);
+    }
+
+    private function isNewConstruction(array $values): bool
+    {
+        return in_array(strtolower((string) ($values['new_construction'] ?? '')), ['yes', '1', 'true'], true);
+    }
+
+    /**
+     * Reozom attaches the EPA pamphlet "Protect Your Family From Lead In Your Home" to a finished
+     * MI/FL residential listing built before 1978 (not for agents), as an uploaded document.
+     */
+    public const LEAD_PAMPHLET_TYPE = 'lead_pamphlet';
+
+    /** Reozom "Extra Documents": fixed forms shown with the documents (View / Send to email only). */
+    public const EXTRA_DOCUMENT_TYPES = ['condo_governance_form'];
+
+    /**
+     * Reozom Florida/VacantLand DocumentsService::getExtraDocuments: the "Condo Governance Form".
+     * Added once the PDF is placed at resources/documents/fl-condo-governance-form.pdf.
+     */
+    public function attachExtraDocuments(Listing $listing): void
+    {
+        if ($listing->isAgentListing() || $listing->getStateCode() !== 'FL' || $listing->publicPropertyType() !== 'vacant_land') {
+            return;
+        }
+
+        $source = resource_path('documents/fl-condo-governance-form.pdf');
+        if (! is_file($source) || $listing->documents()->where('type', 'condo_governance_form')->exists()) {
+            return;
+        }
+
+        $path = "listings/{$listing->id}/documents/fl-condo-governance-form.pdf";
+        \Illuminate\Support\Facades\Storage::disk('local')->put($path, file_get_contents($source));
+
+        $listing->documents()->create([
+            'user_id' => $listing->user_id,
+            'type' => 'condo_governance_form',
+            'original_name' => 'Condo Governance Form.pdf',
+            'path' => $path,
+            'mime_type' => 'application/pdf',
+            'size' => filesize($source),
+            'status' => 'uploaded',
+            'admin_notes' => 'Extra document for Florida vacant land listings.',
+        ]);
+    }
+
+    public function attachLeadPamphlet(Listing $listing): void
+    {
+        if ($listing->isAgentListing() || $listing->publicPropertyType() === 'vacant_land'
+            || ! in_array($listing->getStateCode(), ['MI', 'FL'], true)) {
+            return;
+        }
+
+        $yearBuilt = $listing->answerValue('year_built');
+        if (! is_numeric($yearBuilt) || (int) $yearBuilt >= 1978) {
+            return;
+        }
+
+        $source = resource_path('documents/lead-pamphlet.pdf');
+        if (! is_file($source) || $listing->documents()->where('type', self::LEAD_PAMPHLET_TYPE)->exists()) {
+            return;
+        }
+
+        $path = "listings/{$listing->id}/documents/lead-pamphlet.pdf";
+        \Illuminate\Support\Facades\Storage::disk('local')->put($path, file_get_contents($source));
+
+        $listing->documents()->create([
+            'user_id' => $listing->user_id,
+            'type' => self::LEAD_PAMPHLET_TYPE,
+            'original_name' => 'Protect Your Family From Lead In Your Home.pdf',
+            'path' => $path,
+            'mime_type' => 'application/pdf',
+            'size' => filesize($source),
+            'status' => 'uploaded',
+            'admin_notes' => 'EPA lead hazard pamphlet, added automatically for homes built before 1978.',
+        ]);
     }
 
     /**
@@ -650,6 +753,13 @@ class DisclosureService
     public function generateListingDocuments(Listing $listing): \Illuminate\Support\Collection
     {
         $listing->load(['answers', 'listingProcess', 'user', 'servicePackage']);
+
+        if ($listing->isAgentListing()) {
+            $this->removeUnsignedListingDocuments($listing);
+
+            return collect();
+        }
+
         $values = $listing->answerValues();
         $templates = $this->applicableTemplates($listing, $values);
 
@@ -685,6 +795,22 @@ class DisclosureService
             ->delete();
 
         return $documents;
+    }
+
+    /** Statutory document types of listings without disclosure steps. */
+    public const STATUTORY_DOCUMENT_TYPES = ['sellers_disclosure', 'lead_disclosure', 'condo_disclosure', 'listing_agreement', 'agency_disclosure'];
+
+    /**
+     * Agent listings have no listing documents (original Reozom deletes them). Signed documents
+     * and the files people uploaded are kept.
+     */
+    private function removeUnsignedListingDocuments(Listing $listing): void
+    {
+        $listing->documents()
+            ->where('status', '!=', 'signed')
+            ->where(fn ($q) => $q->whereNotNull('document_template_id')
+                ->orWhereIn('type', self::STATUTORY_DOCUMENT_TYPES))
+            ->delete();
     }
 
     /**

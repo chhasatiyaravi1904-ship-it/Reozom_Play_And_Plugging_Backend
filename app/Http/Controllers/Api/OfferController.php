@@ -796,6 +796,49 @@ class OfferController extends Controller
     /**
      * Render a standard Reozom Purchase Agreement Contract HTML.
      */
+    /**
+     * One signature line per purchase agreement signer, in signing order. The white "$sN" text is
+     * EunoDoc's placement anchor for signer N (same layout as the listing documents).
+     *
+     * @param  array<int, array{name: string, email: string, role: string}>  $signers
+     */
+    public function purchaseAgreementSignatureLines(array $signers): string
+    {
+        $roleLabels = [
+            'listing_agent' => 'Listing Agent Signature',
+            'selling_agent' => 'Selling Agent Signature',
+            'buyer' => 'Purchaser Signature',
+            'seller' => 'Seller Signature',
+            'additional_signer' => 'Seller Signature',
+        ];
+
+        $cell = function (int $number, array $signer) use ($roleLabels): string {
+            $pad = str_repeat('&nbsp;', 12);
+            $label = htmlspecialchars($signer['name']).' ('.htmlspecialchars($signer['email']).')';
+            $role = $roleLabels[$signer['role'] ?? ''] ?? 'Signature';
+
+            return '<td style="width:44%;font-size:9.5pt;color:#111111;vertical-align:bottom;">'
+                .'<p style="margin:0;text-align:center;border-bottom:0.5px solid #000;color:#ffffff;font-size:25px;line-height:30px;">'
+                ."{$pad}\$s{$number}{$pad}</p>"
+                ."<div style=\"font-size:7.5pt;color:#555555;text-transform:uppercase;letter-spacing:0.5px;\">{$role}</div>"
+                ."<div style=\"margin-top:3px;\"><strong>{$label}</strong></div>"
+                .'<div style="margin-top:8px;">Date: ______________________</div>'
+                .'</td>';
+        };
+
+        $rows = '';
+        foreach (array_chunk($signers, 2) as $rowIndex => $pair) {
+            $cells = [];
+            foreach ($pair as $i => $signer) {
+                $cells[] = $cell($rowIndex * 2 + $i + 1, $signer);
+            }
+            $rows .= '<tr>'.implode('<td style="width:12%;"></td>', $cells).'</tr>'
+                .'<tr><td colspan="3" style="height:18px;"></td></tr>';
+        }
+
+        return '<table style="width:100%;border-collapse:collapse;margin-top:12px;">'.$rows.'</table>';
+    }
+
     private function renderPurchaseAgreementHtml(ListingOffer $offer): string
     {
         $listing = $offer->listing;
@@ -820,6 +863,7 @@ class OfferController extends Controller
         $isAccepted = $offer->status === 'accepted';
         $statusLabel = strtoupper(str_replace('_', ' ', $offer->status));
         $date = $offer->created_at ? $offer->created_at->format('F j, Y') : now()->format('F j, Y');
+        $signatureBlock = $this->purchaseAgreementSignatureLines($offer->eSignSigners());
 
         // Purchasers list
         $purchasersHtml = '';
@@ -951,28 +995,8 @@ class OfferController extends Controller
         </div>
 
         <h2>4. Offer Acceptance & Signatures</h2>
-        <table class="signatures-table">
-            <tr>
-                <td>
-                    <strong>PURCHASER SIGNATURE & ACCEPTANCE</strong>
-                    <div style="margin-top:6px;color:#64748b;">Buyer certifies offer submission under specified terms.</div>
-                    <div class="sign-line"></div>
-                    <div style="margin-top:6px;font-size:10px;color:#64748b;">
-                        Purchaser: {$buyerName}<br>
-                        Date: {$date}
-                    </div>
-                </td>
-                <td>
-                    <strong>SELLER ACCEPTANCE & RATIFICATION</strong>
-                    <div style="margin-top:6px;color:#64748b;">Seller acknowledges and executes this purchase contract.</div>
-                    <div class="sign-line"></div>
-                    <div style="margin-top:6px;font-size:10px;color:#64748b;">
-                        Seller: {$sellerName}<br>
-                        Status: {$statusLabel}
-                    </div>
-                </td>
-            </tr>
-        </table>
+        <div style="font-size:10px;color:#64748b;">Offer date: {$date} &middot; Status: {$statusLabel}</div>
+        {$signatureBlock}
 
         <div style="margin-top:16px;font-size:9px;color:#94a3b8;line-height:1.4;text-align:center;">
             This electronic contract document is generated through Reozom Real Estate Platform in accordance with the Uniform Electronic Transactions Act (UETA) and Federal E-SIGN Act.

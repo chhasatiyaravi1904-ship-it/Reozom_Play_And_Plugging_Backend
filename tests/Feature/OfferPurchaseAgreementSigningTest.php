@@ -63,7 +63,8 @@ class OfferPurchaseAgreementSigningTest extends TestCase
 
         // Each signer gets the link for their own recipient id
         $agreement = ListingEunoAgreement::firstOrFail();
-        $ids = collect($agreement->signers)->pluck('_id', 'email');
+        // Signers are stored in signing order with their EunoDoc recipient id
+        $ids = collect($agreement->signers)->pluck('recipient_id', 'email');
         $this->assertStringEndsWith('/'.$ids['seller.pa@example.com'], $sellerRes->json('data.signing_url'));
         $this->assertStringEndsWith('/'.$ids['buyer.pa@example.com'], $buyerRes->json('data.signing_url'));
     }

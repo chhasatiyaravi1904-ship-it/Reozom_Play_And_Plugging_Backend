@@ -7,7 +7,6 @@ use App\Models\Listing;
 use App\Models\ListingDocument;
 use App\Models\ListingEunoAgreement;
 use App\Models\ListingOffer;
-use App\Models\ListingOfferDocument;
 use App\Services\EunoService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -31,6 +30,10 @@ class EunoSignController extends Controller
 
         if ($user->id !== $listing->user_id && ! $user->isAdmin()) {
             return api_error('Unauthorized to initiate signing for this listing.', 403);
+        }
+
+        if ($listing->isAgentListing()) {
+            return api_error('Agent listings have no listing documents to sign.', 422);
         }
 
         $signers = $listing->eSignSigners();
@@ -63,10 +66,14 @@ class EunoSignController extends Controller
         // Unsigned PDFs carrying the $sN signature tags. Kept apart from the document's own
         // files so a later view/download never serves this copy by mistake.
         $sourcePaths = [];
+        $documentPages = [];
         foreach ($documents as $doc) {
             $relPath = "listings/{$listing->id}/unsigned/{$doc->type}.pdf";
-            Storage::disk('local')->put($relPath, $docController->renderPdf($listing, $doc));
+            $pdf = $docController->renderPdf($listing, $doc);
+            Storage::disk('local')->put($relPath, $pdf);
             $sourcePaths[$doc->id] = $relPath;
+            // Page ranges let the signed packet be split per document afterwards (Reozom documentSplit)
+            $documentPages[$doc->id] = $this->pdfPageCount($pdf);
         }
 
         $filePaths = array_map(fn ($p) => Storage::disk('local')->path($p), array_values($sourcePaths));
@@ -101,6 +108,7 @@ class EunoSignController extends Controller
             'signers' => $this->mergeRecipientIds($signers, $recipients),
             // Keyed by listing_documents.id so completion marks exactly these documents signed.
             'source_file_paths' => $sourcePaths,
+            'document_pages' => in_array(null, $documentPages, true) ? null : $documentPages,
             'sent_at' => now(),
         ]);
 
@@ -108,8 +116,10 @@ class EunoSignController extends Controller
     }
 
     /**
-     * Listing-document agreements still waiting to be signed where the current user is a
-     * signer, each with that user's own signing link (shown as a pop-up after login).
+     * Agreements still waiting for the current user's signature, each with that user's own signing
+     * link (shown as a pop-up after login): listing documents (in signing order: only the next
+     * signer), and, like Reozom's dashboard, purchase agreements and addendums the user has not
+     * signed yet (all parties at once).
      */
     public function pendingSignatures(Request $request): JsonResponse
     {
@@ -117,7 +127,6 @@ class EunoSignController extends Controller
         $like = '%'.addcslashes($email, '\\%_').'%';
 
         $items = ListingEunoAgreement::query()
-            ->whereNull('listing_offer_id')
             ->where('status', 'inprogress')
             ->whereNotNull('agreement_id')
             // Cheap pre-filter; the exact email match is checked below.
@@ -133,12 +142,25 @@ class EunoSignController extends Controller
                     return null;
                 }
 
-                // Each signer gets their own EunoDoc link, built from their recipient id.
-                if (! empty($signer['recipient_id'])) {
+                $progress = $this->signingProgress($agreement);
+                if ($agreement->listing_offer_id === null) {
+                    // Listing documents: owner first, then each additional signer; only the next one gets a link
+                    if ($progress['next_email'] !== $email) {
+                        return null;
+                    }
+                } elseif (collect($progress['signers'])->firstWhere('email', $email)['signed'] ?? false) {
+                    // Purchase agreement / addendum: everyone signs at once; skip if this user already signed
+                    return null;
+                }
+
+                // Each signer gets their own EunoDoc link, built from their recipient id
+                // (older offer agreements stored EunoDoc's raw recipients with _id).
+                $recipientId = $signer['recipient_id'] ?? $signer['_id'] ?? null;
+                if (! empty($recipientId)) {
                     $url = $this->eunoService->getSigningUrlForUser(
                         $agreement->agreement_id,
                         $email,
-                        [['email' => $email, '_id' => $signer['recipient_id']]]
+                        [['email' => $email, '_id' => $recipientId]]
                     );
                 } elseif ($agreement->initiated_by_user_id === $request->user()->id) {
                     $url = $agreement->signing_url;
@@ -153,6 +175,9 @@ class EunoSignController extends Controller
 
                 return [
                     'agreement_id' => $agreement->id,
+                    // listing_documents | purchase_agreement | addendum
+                    'kind' => $agreement->listing_offer_id === null ? 'listing_documents' : ($agreement->document_type ?: 'purchase_agreement'),
+                    'offer_id' => $agreement->listing_offer_id,
                     'listing_id' => $listing->id,
                     'listing_address' => trim(implode(', ', array_filter([$listing->address, $listing->city, trim("{$listing->state} {$listing->zip}")]))),
                     'document_name' => $agreement->document_name,
@@ -183,6 +208,7 @@ class EunoSignController extends Controller
             return api_success([
                 'has_agreement' => false,
                 'status' => 'not_initiated',
+                'is_agent_listing' => $listing->isAgentListing(),
                 'signers' => $listing->eSignSigners(),
             ]);
         }
@@ -196,13 +222,55 @@ class EunoSignController extends Controller
             }
         }
 
-        return api_success([
+        $payload = [
             'has_agreement' => true,
+            'is_agent_listing' => $listing->isAgentListing(),
             'is_completed' => $agreement->status === 'completed',
             'signed_at' => $agreement->completed_at,
             'has_signed_pdf' => (bool) $agreement->signed_file_path,
             'has_audit_pdf' => (bool) $agreement->audit_file_path,
-        ] + $this->agreementPayload($agreement));
+        ] + $this->agreementPayload($agreement);
+
+        if ($agreement->status === 'inprogress') {
+            $progress = $this->signingProgress($agreement);
+            $payload['signers'] = $progress['signers'];
+            $payload['next_signer'] = $progress['next_name'];
+            // Only the next signer may sign now; everyone else waits for them
+            $payload['can_sign_now'] = $progress['next_email'] === strtolower((string) $request->user()->email);
+        }
+
+        return api_success($payload);
+    }
+
+    /**
+     * Who has signed and who signs next. Signers sign in the stored order (titled owner, then
+     * the additional signers); the next one is the first whose EunoDoc recipient status is not done.
+     *
+     * @return array{signers: array<int, array{name: string, email: string, signed: bool, is_next: bool}>, next_email: ?string, next_name: ?string}
+     */
+    protected function signingProgress(ListingEunoAgreement $agreement): array
+    {
+        $statuses = [];
+        $details = $agreement->agreement_id ? $this->eunoService->getDocumentUrl($agreement->agreement_id) : null;
+        foreach ((array) ($details['recipients'] ?? []) as $recipient) {
+            $statuses[strtolower((string) ($recipient['email'] ?? ''))] = strtolower((string) ($recipient['status'] ?? ''));
+        }
+
+        $nextEmail = null;
+        $nextName = null;
+        $signers = [];
+        foreach ($agreement->signers ?? [] as $signer) {
+            $email = strtolower((string) ($signer['email'] ?? ''));
+            $signed = in_array($statuses[$email] ?? '', ['signed', 'completed'], true);
+            $isNext = ! $signed && $nextEmail === null;
+            if ($isNext) {
+                $nextEmail = $email;
+                $nextName = (string) ($signer['name'] ?? $email);
+            }
+            $signers[] = ['name' => (string) ($signer['name'] ?? ''), 'email' => $email, 'signed' => $signed, 'is_next' => $isNext];
+        }
+
+        return ['signers' => $signers, 'next_email' => $nextEmail, 'next_name' => $nextName];
     }
 
     /**
@@ -240,6 +308,7 @@ class EunoSignController extends Controller
 
         $signers = $agreement->signers ?? [];
         $documentIds = array_keys($agreement->source_file_paths ?? []);
+        $splitPaths = $this->splitSignedPacket($agreement, $signedPath);
 
         ListingDocument::where('listing_id', $agreement->listing_id)
             ->whereIn('id', $documentIds)
@@ -258,9 +327,74 @@ class EunoSignController extends Controller
                     'euno_agreement_id' => $agreement->agreement_id,
                     'signers' => $signers,
                     'completed_at' => now()->toIso8601String(),
+                    // This document's own signed pages, when the packet could be split
+                    'signed_file_path' => $splitPaths[$doc->id] ?? null,
                 ],
                 'admin_notes' => 'Electronically signed via EunoDoc.',
             ]));
+    }
+
+    private function pdfPageCount(string $pdf): ?int
+    {
+        try {
+            return count((new \Smalot\PdfParser\Parser())->parseContent($pdf)->getPages()) ?: null;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Split the signed packet into one signed PDF per document, like Reozom's documentSplit + qpdf.
+     * Packet pages follow the order the documents were sent in; EunoDoc may add pages (audit) at the
+     * end, which are ignored. Without qpdf, page counts or enough pages nothing is split and each
+     * document keeps serving the whole signed packet.
+     *
+     * @return array<int|string, string> listing_document_id => signed file path (local disk)
+     */
+    protected function splitSignedPacket(ListingEunoAgreement $agreement, string $signedPath): array
+    {
+        $pages = $agreement->document_pages ?? [];
+        if ($pages === []) {
+            return [];
+        }
+
+        $signedPages = $this->pdfPageCount(Storage::disk('local')->get($signedPath));
+        if (! $signedPages || $signedPages < array_sum($pages)) {
+            \Illuminate\Support\Facades\Log::warning('Signed packet has fewer pages than sent; not split.', ['listing_euno_agreement_id' => $agreement->id]);
+
+            return [];
+        }
+
+        $input = Storage::disk('local')->path($signedPath);
+        $paths = [];
+        $start = 1;
+        foreach ($pages as $documentId => $count) {
+            $end = $start + (int) $count - 1;
+            $relPath = "listings/{$agreement->listing_id}/signed/Agreement_{$agreement->id}_Document_{$documentId}.pdf";
+            Storage::disk('local')->makeDirectory(dirname($relPath));
+
+            $result = \Illuminate\Support\Facades\Process::run([
+                config('euno.qpdf_path', 'qpdf'), '--empty', '--pages', $input, "{$start}-{$end}", '--', Storage::disk('local')->path($relPath),
+            ]);
+            if ($result->successful() && Storage::disk('local')->exists($relPath)) {
+                $paths[$documentId] = $relPath;
+            } else {
+                \Illuminate\Support\Facades\Log::warning('qpdf could not split the signed packet.', [
+                    'listing_euno_agreement_id' => $agreement->id, 'error' => $result->errorOutput(),
+                ]);
+            }
+            $start = $end + 1;
+        }
+
+        return $paths;
+    }
+
+    /**
+     * @param  array<int, array{email: string}>  $signers
+     */
+    protected function isSigner(array $signers, ?string $email): bool
+    {
+        return in_array(strtolower((string) $email), array_column($signers, 'email'), true);
     }
 
     /**
@@ -302,8 +436,10 @@ class EunoSignController extends Controller
         $user = $request->user();
         $listing = $offer->listing;
 
-        // Ensure user is buyer, seller, or admin
-        if ($user->id !== $offer->buyer_id && $user->id !== $listing->user_id && !$user->isAdmin()) {
+        // Buyer, listing owner, admin, or anyone who signs the purchase agreement
+        $signers = $offer->eSignSigners();
+        if ($user->id !== $offer->buyer_id && $user->id !== $listing->user_id && ! $user->isAdmin()
+            && ! $this->isSigner($signers, $user->email)) {
             return api_error('Unauthorized to initiate signing on this offer.', 403);
         }
 
@@ -315,12 +451,18 @@ class EunoSignController extends Controller
         // Buyer and seller must sign the SAME agreement: if one is already open, hand this
         // user their own link to it instead of creating a second agreement.
         $existing = ListingEunoAgreement::where('listing_offer_id', $offer->id)
+            ->where('document_type', 'purchase_agreement')
             ->where('status', 'inprogress')
             ->whereNotNull('agreement_id')
             ->latest()
             ->first();
         if ($existing) {
-            $signingUrl = $this->eunoService->getSigningUrlForUser($existing->agreement_id, $user->email, $existing->signers ?? [])
+            // Stored signers carry recipient_id (older agreements stored EunoDoc's raw recipients with _id)
+            $recipients = array_map(
+                fn ($s) => ['email' => $s['email'] ?? '', '_id' => $s['recipient_id'] ?? $s['_id'] ?? null],
+                $existing->signers ?? []
+            );
+            $signingUrl = $this->eunoService->getSigningUrlForUser($existing->agreement_id, $user->email, $recipients)
                 ?? $existing->signing_url;
 
             return api_success([
@@ -332,49 +474,63 @@ class EunoSignController extends Controller
             ], 'Existing offer agreement retrieved.');
         }
 
-        // Build signers array (Buyer and Seller)
-        $signers = [
-            [
-                'email' => $offer->buyer->email,
-                'name' => $offer->buyer->name,
-                'type' => 'signer',
-            ],
-            [
-                'email' => $listing->user->email,
-                'name' => $listing->user->name,
-                'type' => 'signer',
-            ],
-        ];
+        return $this->createOfferAgreement($offer, $user, $signers, 'Offer agreement created with Eunodoc.');
+    }
 
-        // Gather purchase agreement document or generate template
-        $offerDocs = ListingOfferDocument::where('listing_offer_id', $offer->id)
-            ->where('type', 'purchase_agreement')
-            ->get();
-
-        $filePaths = [];
-        foreach ($offerDocs as $doc) {
-            $path = Storage::disk('local')->path($doc->path);
-            if (file_exists($path)) {
-                $filePaths[] = $path;
-            }
+    /**
+     * Cancel the open purchase agreement and send a new one with the current terms and signers
+     * (original Reozom: admin regenerate). Listing owner or admin only.
+     */
+    public function resendOfferSigning(Request $request, ListingOffer $offer): JsonResponse
+    {
+        $user = $request->user();
+        if ($user->id !== $offer->listing?->user_id && ! $user->isAdmin()) {
+            return api_error('Only the listing owner or an admin can resend the purchase agreement.', 403);
+        }
+        if ($offer->status !== ListingOffer::STATUS_ACCEPTED) {
+            return api_error('The purchase agreement can be signed once the offer is accepted.', 422);
         }
 
-        if (empty($filePaths)) {
-            $dir = storage_app_path("offers/{$offer->id}");
-            if (!file_exists($dir)) {
-                @mkdir($dir, 0755, true);
-            }
-            $samplePa = $dir . '/Purchase_Agreement.pdf';
-            if (!file_exists($samplePa)) {
-                file_put_contents($samplePa, $this->buildSampleOfferPdf($offer));
-            }
-            $filePaths[] = $samplePa;
+        app(\App\Services\OfferService::class)->cancelOpenPurchaseAgreements($offer);
+
+        return $this->createOfferAgreement($offer, $user, $offer->eSignSigners(), 'Purchase agreement sent again for signature.');
+    }
+
+    /**
+     * One EunoDoc agreement for the offer, as in Reozom: the generated Purchase Agreement plus the
+     * listing's Lead and Seller's Disclosure, unless the property is new construction, the listing
+     * is agent-owned or the owner is a non-owner-occupied trust. Files a party uploaded are
+     * attachments only and are never sent for signature.
+     *
+     * @param  array<int, array{name: string, email: string, role: string}>  $signers
+     */
+    protected function createOfferAgreement(ListingOffer $offer, $user, array $signers, string $message): JsonResponse
+    {
+        $listing = $offer->listing;
+        if ($signers === []) {
+            return api_error('No signer email found for this purchase agreement.', 422);
         }
+
+        // Unsigned copies built for this agreement, kept apart from any uploaded offer files
+        $dir = "offers/{$offer->id}/unsigned";
+        $relPaths = ["{$dir}/Purchase_Agreement.pdf"];
+        Storage::disk('local')->put($relPaths[0], $this->buildSampleOfferPdf($offer));
+
+        if ($this->offerPacketIncludesDisclosures($listing)) {
+            $docController = app(ListingDocumentController::class);
+            foreach ($docController->offerDisclosureDocuments($listing) as $doc) {
+                $path = "{$dir}/{$doc->type}.pdf";
+                Storage::disk('local')->put($path, $docController->renderPdf($listing, $doc, $signers));
+                $relPaths[] = $path;
+            }
+        }
+        $filePaths = array_map(fn ($p) => Storage::disk('local')->path($p), $relPaths);
 
         $docName = "Purchase Agreement - Offer #{$offer->id}";
-        $agreementResponse = $this->eunoService->getAgreementKey($filePaths, $docName, $signers);
+        $eunoSigners = array_map(fn ($s) => $s + ['type' => 'signer'], $signers);
+        $agreementResponse = $this->eunoService->getAgreementKey($filePaths, $docName, $eunoSigners);
 
-        if (!$agreementResponse || empty($agreementResponse['_id'])) {
+        if (! $agreementResponse || empty($agreementResponse['_id'])) {
             return api_error('Failed to initiate offer agreement with Eunodoc.', 502);
         }
 
@@ -390,7 +546,8 @@ class EunoSignController extends Controller
             'agreement_id' => $agreementId,
             'signing_url' => $signingUrl,
             'status' => 'inprogress',
-            'signers' => $agreementResponse['recipients'] ?? $signers,
+            // Names and roles in signing order, each with their EunoDoc recipient id
+            'signers' => $this->mergeRecipientIds($signers, $agreementResponse['recipients'] ?? []),
             'source_file_paths' => $filePaths,
             'sent_at' => now(),
         ]);
@@ -401,7 +558,25 @@ class EunoSignController extends Controller
             'signing_url' => $signingUrl,
             'status' => $agreement->status,
             'signers' => $agreement->signers,
-        ], 'Offer agreement created with Eunodoc.');
+        ], $message);
+    }
+
+    /**
+     * Reozom leaves the Lead and Seller's Disclosure out of the purchase agreement for new
+     * construction, agent-owned listings and non-owner-occupied trusts.
+     */
+    protected function offerPacketIncludesDisclosures(Listing $listing): bool
+    {
+        if ($listing->isAgentListing()) {
+            return false;
+        }
+
+        $values = $listing->answerValues();
+        if (in_array(strtolower((string) ($values['new_construction'] ?? '')), ['yes', '1', 'true'], true)) {
+            return false;
+        }
+
+        return ! \App\Models\ListingProcess::conditionMatches(\App\Models\ListingProcess::TRUST_NON_OWNER_SKIP_RULE, $values);
     }
 
     /**
@@ -416,12 +591,14 @@ class EunoSignController extends Controller
         $allowed = $user->isAdmin()
             || $user->id === $offer->buyer_id
             || $user->id === $listing?->user_id
-            || ($user->isAgent() && $listing?->servicePackage?->agent_id === $user->id);
+            || ($user->isAgent() && $listing?->servicePackage?->agent_id === $user->id)
+            || $this->isSigner($offer->eSignSigners(), $user->email);
         if (! $allowed) {
             return api_error('Unauthorized to view signing on this offer.', 403);
         }
 
         $agreement = ListingEunoAgreement::where('listing_offer_id', $offer->id)
+            ->where('document_type', 'purchase_agreement')
             ->latest()
             ->first();
 
@@ -495,6 +672,12 @@ class EunoSignController extends Controller
                 $agreement->signed_file_path = $signedPath;
             }
             $agreement->save();
+
+            // A signed addendum is shared with the seller's listing and the buyer's library (Reozom)
+            if ($agreement->document_type === 'addendum' && $agreement->signed_file_path) {
+                \App\Models\OfferAddendum::where('listing_euno_agreement_id', $agreement->id)->first()
+                    ?->shareSignedCopy($agreement->signed_file_path);
+            }
         }
 
         return response()->json(['status' => 'success', 'agreement_status' => $agreement->status]);

@@ -17,4 +17,7 @@ return [
     'auth_token' => env('EUNO_AUTH_TOKEN', ''),
     'retries' => env('EUNO_RETRIES', 3),
     'mock_mode' => env('EUNO_MOCK_MODE', false),
+    // qpdf command used to split a signed packet into one signed PDF per document (as Reozom).
+    // Without qpdf the whole signed packet is served for each document.
+    'qpdf_path' => env('QPDF_PATH', 'qpdf'),
 ];
