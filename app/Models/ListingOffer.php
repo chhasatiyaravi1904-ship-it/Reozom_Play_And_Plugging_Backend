@@ -190,6 +190,33 @@ class ListingOffer extends Model
     }
 
     /**
+     * The user's own entry among a purchase agreement's (or addendum's) signers: matched by email,
+     * or the seller signer for the listing owner's account, whose login email can differ from the
+     * owner email entered in the listing. Null when the user does not sign.
+     *
+     * @param  array<int, array<string, mixed>>  $signers
+     */
+    public function signerFor(User $user, array $signers): ?array
+    {
+        $email = strtolower((string) $user->email);
+        foreach ($signers as $signer) {
+            if (strtolower((string) ($signer['email'] ?? '')) === $email) {
+                return $signer;
+            }
+        }
+
+        if ($user->id === $this->listing?->user_id) {
+            foreach ($signers as $signer) {
+                if (($signer['role'] ?? null) === 'seller') {
+                    return $signer;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Get the offer's bottom line offer calculated from offer amount minus closing costs / seller concessions.
      * Replicates Reozom: ListingOffer::getBottomLineOfferAttribute
      */

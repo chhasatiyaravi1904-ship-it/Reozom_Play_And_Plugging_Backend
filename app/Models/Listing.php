@@ -209,6 +209,25 @@ class Listing extends Model
     }
 
     /**
+     * The user's own entry among a listing-document agreement's signers: matched by email, or the
+     * titled owner (first signer) for the listing owner's account, whose login email can differ
+     * from the owner email entered in the listing. Null when the user does not sign.
+     *
+     * @param  array<int, array<string, mixed>>  $signers
+     */
+    public function signerFor(User $user, array $signers): ?array
+    {
+        $email = strtolower((string) $user->email);
+        foreach ($signers as $signer) {
+            if (strtolower((string) ($signer['email'] ?? '')) === $email) {
+                return $signer;
+            }
+        }
+
+        return $user->id === $this->user_id ? ($signers[0] ?? null) : null;
+    }
+
+    /**
      * Listing-document signers in signing order: the titled owner first, then the additional
      * signers (Reozom sends them out one after another in this order). None for agent listings.
      */

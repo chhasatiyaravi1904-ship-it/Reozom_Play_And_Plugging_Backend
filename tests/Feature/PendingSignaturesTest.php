@@ -119,6 +119,29 @@ class PendingSignaturesTest extends TestCase
             ->assertJsonPath('data.items.0.offer_id', $offer->id);
     }
 
+    public function test_listing_owner_sees_the_purchase_agreement_with_the_seller_link_when_the_signer_email_differs(): void
+    {
+        $offer = \App\Models\ListingOffer::create([
+            'listing_id' => $this->listing->id, 'buyer_id' => $this->coOwner->id,
+            'status' => \App\Models\ListingOffer::STATUS_ACCEPTED, 'offer_amount' => 1000,
+            'closing_date' => now()->addDays(30)->toDateString(),
+        ]);
+        $this->agreement([
+            'listing_offer_id' => $offer->id,
+            'document_type' => 'purchase_agreement',
+            'signers' => [
+                ['name' => 'Co Owner', 'email' => 'co.owner@example.com', 'role' => 'buyer', 'recipient_id' => 'r-buyer'],
+                ['name' => 'Acme LLC', 'email' => 'signer@acme.test', 'role' => 'seller', 'recipient_id' => 'r-seller'],
+            ],
+        ]);
+
+        $owner = $this->pending($this->seller)->assertJsonPath('data.count', 1);
+        $this->assertStringEndsWith('/esign/mock_abc123/r-seller', $owner->json('data.items.0.signing_url'));
+
+        $buyer = $this->pending($this->coOwner)->assertJsonPath('data.count', 1);
+        $this->assertStringEndsWith('/esign/mock_abc123/r-buyer', $buyer->json('data.items.0.signing_url'));
+    }
+
     public function test_requires_login(): void
     {
         $this->getJson('/api/me/pending-signatures')->assertUnauthorized();

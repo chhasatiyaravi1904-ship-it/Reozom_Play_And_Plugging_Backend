@@ -69,6 +69,66 @@ class OfferPurchaseAgreementSigningTest extends TestCase
         $this->assertStringEndsWith('/'.$ids['buyer.pa@example.com'], $buyerRes->json('data.signing_url'));
     }
 
+    public function test_listing_owner_with_a_different_signer_email_gets_the_seller_link_not_the_buyers(): void
+    {
+        // The seller signer is the corporation email entered in the listing, not the owner's login
+        \App\Models\ListingAnswer::create([
+            'listing_id' => $this->offer->listing_id, 'step_id' => 'step_property_type_address',
+            'values' => ['owner_type' => 'corporation', 'owner_type_company_name' => 'Acme LLC', 'owner_type_company_email' => 'signer@acme.test'],
+        ]);
+
+        $sellerRes = $this->initiate($this->seller)->assertOk();
+        $buyerRes = $this->initiate($this->buyer)->assertOk();
+
+        $ids = collect(ListingEunoAgreement::firstOrFail()->signers)->pluck('recipient_id', 'role');
+        $this->assertStringEndsWith('/'.$ids['seller'], $sellerRes->json('data.signing_url'));
+        $this->assertStringEndsWith('/'.$ids['buyer'], $buyerRes->json('data.signing_url'));
+    }
+
+    public function test_status_shows_who_has_signed_and_whether_the_viewer_has(): void
+    {
+        $this->initiate($this->seller)->assertOk();
+        // EunoDoc: the buyer has signed, the seller not yet
+        $this->fakeEuno(function ($mock) {
+            $mock->shouldReceive('getAgreementStatus')->andReturn('inprogress');
+            $mock->shouldReceive('getDocumentUrl')->andReturn(['recipients' => [
+                ['email' => 'buyer.pa@example.com', 'status' => 'completed'],
+                ['email' => 'seller.pa@example.com', 'status' => 'pending'],
+            ]]);
+        });
+        $url = "/api/offers/{$this->offer->id}/euno-sign/status";
+
+        $buyer = $this->actingAs($this->buyer)->getJson($url)->assertOk()
+            ->assertJsonPath('data.status', 'inprogress')
+            ->assertJsonPath('data.you_signed', true)
+            ->assertJsonPath('data.signers.0.role', 'buyer')
+            ->assertJsonPath('data.signers.0.signed', true)
+            ->assertJsonPath('data.signers.1.role', 'seller')
+            ->assertJsonPath('data.signers.1.signed', false);
+        // Names and roles only: no signer emails
+        $this->assertArrayNotHasKey('email', $buyer->json('data.signers.0'));
+
+        $this->actingAs($this->seller)->getJson($url)->assertOk()->assertJsonPath('data.you_signed', false);
+        $this->actingAs($this->agent)->getJson($url)->assertOk()->assertJsonPath('data.you_signed', null);
+    }
+
+    public function test_people_who_do_not_sign_never_get_someone_elses_link(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin']);
+
+        // An admin can send the agreement but gets no signing link of their own
+        $this->initiate($admin)->assertOk()
+            ->assertJsonPath('data.signing_url', null)
+            ->assertJsonPath('message', 'Offer agreement created with Eunodoc. You are not a signer on this purchase agreement.');
+        $this->initiate($admin)->assertOk()->assertJsonPath('data.signing_url', null);
+        $this->assertNull(ListingEunoAgreement::firstOrFail()->signing_url);
+
+        // The plan's agent can view the status, but without a link
+        $this->actingAs($this->agent)->getJson("/api/offers/{$this->offer->id}/euno-sign/status")
+            ->assertOk()
+            ->assertJsonPath('data.signing_url', null);
+    }
+
     public function test_a_new_agreement_is_created_once_the_previous_one_is_finished(): void
     {
         $this->initiate($this->seller)->assertOk();

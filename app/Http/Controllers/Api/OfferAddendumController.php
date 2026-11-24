@@ -79,12 +79,13 @@ class OfferAddendumController extends Controller
             'document_type' => 'addendum',
             'document_name' => $name,
             'agreement_id' => $response['_id'],
-            'signing_url' => $this->eunoService->getSigningUrlForUser($response['_id'], $user->email, $recipients),
             'status' => 'inprogress',
             'signers' => $this->withRecipientIds($signers, $recipients),
             'source_file_paths' => [$filePath],
             'sent_at' => now(),
         ]);
+        // The creator's own link only (never another signer's)
+        $agreement->update(['signing_url' => $this->signingUrlFor($agreement, $offer, $user)]);
         $addendum->update(['listing_euno_agreement_id' => $agreement->id]);
 
         return api_success($this->payload($addendum->load('agreement'), $user), 'Addendum sent for signature.', 201);
@@ -138,6 +139,25 @@ class OfferAddendumController extends Controller
         return api_success(null, 'Addendum canceled.');
     }
 
+    /**
+     * The user's own EunoDoc link to the addendum: their signer entry by email, or the seller
+     * signer for the listing owner's account. Null for anyone who doesn't sign.
+     */
+    private function signingUrlFor(ListingEunoAgreement $agreement, ?ListingOffer $offer, User $user): ?string
+    {
+        $signer = $offer?->signerFor($user, $agreement->signers ?? []);
+        $recipientId = $signer['recipient_id'] ?? $signer['_id'] ?? null;
+        if (! $signer || empty($recipientId) || ! $agreement->agreement_id) {
+            return null;
+        }
+
+        return $this->eunoService->getSigningUrlForUser(
+            $agreement->agreement_id,
+            (string) $signer['email'],
+            [['email' => (string) $signer['email'], '_id' => $recipientId]]
+        );
+    }
+
     private function canView(User $user, ListingOffer $offer): bool
     {
         $listing = $offer->listing;
@@ -153,18 +173,9 @@ class OfferAddendumController extends Controller
     private function syncStatus(OfferAddendum $addendum): OfferAddendum
     {
         $agreement = $addendum->agreement;
-        if (! $agreement || $agreement->status !== 'inprogress' || ! $agreement->agreement_id) {
-            return $addendum;
-        }
-
-        if ($this->eunoService->getAgreementStatus($agreement->agreement_id) === 'completed') {
-            $signed = $this->eunoService->getSignedDocument($agreement->agreement_id);
-            if ($signed) {
-                $path = "offers/{$addendum->listing_offer_id}/signed/Addendum_{$addendum->id}.pdf";
-                Storage::disk('local')->put($path, $signed);
-                $agreement->update(['status' => 'completed', 'completed_at' => now(), 'signed_file_path' => $path]);
-                $addendum->shareSignedCopy($path);
-            }
+        if ($agreement) {
+            // Same completion as the status pages, webhook and scheduled euno:sync
+            app(EunoSignController::class)->syncAgreement($agreement);
         }
 
         return $addendum;
@@ -175,16 +186,9 @@ class OfferAddendumController extends Controller
         $agreement = $addendum->agreement;
         $user = $forUser ?? request()->user();
 
-        $signingUrl = null;
-        if ($agreement?->status === 'inprogress' && $agreement->agreement_id && $user) {
-            $recipients = array_map(
-                fn ($s) => ['email' => $s['email'] ?? '', '_id' => $s['recipient_id'] ?? null],
-                $agreement->signers ?? []
-            );
-            if (in_array(strtolower((string) $user->email), array_column($recipients, 'email'), true)) {
-                $signingUrl = $this->eunoService->getSigningUrlForUser($agreement->agreement_id, $user->email, $recipients);
-            }
-        }
+        $signingUrl = $agreement?->status === 'inprogress' && $user
+            ? $this->signingUrlFor($agreement, $addendum->offer, $user)
+            : null;
 
         return [
             'id' => $addendum->id,

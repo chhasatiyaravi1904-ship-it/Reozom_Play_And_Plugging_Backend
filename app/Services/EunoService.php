@@ -285,16 +285,17 @@ class EunoService
             $docId = $agreementId;
         }
 
-        $recipientId = '0';
-
-        if (!empty($recipients) && is_array($recipients)) {
-            $recipientId = $recipients[0]['_id'] ?? '0';
-            foreach ($recipients as $signer) {
-                if (strcasecmp($signer['email'] ?? '', $userEmail) === 0) {
-                    $recipientId = $signer['_id'] ?? $recipientId;
-                    break;
-                }
+        // Only the user's own recipient link: never fall back to another signer's (that would let
+        // the user sign in someone else's place).
+        $recipientId = null;
+        foreach (is_array($recipients) ? $recipients : [] as $signer) {
+            if (strcasecmp($signer['email'] ?? '', $userEmail) === 0 && ! empty($signer['_id'])) {
+                $recipientId = $signer['_id'];
+                break;
             }
+        }
+        if ($recipientId === null) {
+            return null;
         }
 
         return rtrim($this->webUrl, '/') . '/esign/' . $docId . '/' . $recipientId;

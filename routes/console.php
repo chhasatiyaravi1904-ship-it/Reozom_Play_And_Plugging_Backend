@@ -28,3 +28,34 @@ Artisan::command('stripe:sync-plans', function (\App\Services\StripeCatalogServi
 
     return $failed ? 1 : 0;
 })->purpose('Create or update all plans in Stripe');
+
+// Pick up e-signing progress from EunoDoc without anyone opening a page: completes finished
+// listing-document, purchase-agreement and addendum agreements and stores the signed copies.
+Artisan::command('euno:sync', function () {
+    $controller = app(\App\Http\Controllers\Api\EunoSignController::class);
+    $counts = ['completed' => 0, 'open' => 0, 'failed' => 0];
+
+    \App\Models\ListingEunoAgreement::query()
+        ->where('status', 'inprogress')
+        ->whereNotNull('agreement_id')
+        ->orderBy('id')
+        ->each(function (\App\Models\ListingEunoAgreement $agreement) use ($controller, &$counts) {
+            try {
+                $status = $controller->syncAgreement($agreement);
+                $counts[$status === 'completed' ? 'completed' : 'open']++;
+            } catch (\Throwable $e) {
+                // One failing agreement must not stop the rest; the next run retries it
+                $counts['failed']++;
+                \Illuminate\Support\Facades\Log::warning('euno:sync failed for agreement', [
+                    'listing_euno_agreement_id' => $agreement->id,
+                    'message' => $e->getMessage(),
+                ]);
+            }
+        });
+
+    $this->info("EunoDoc sync: {$counts['completed']} completed, {$counts['open']} not completed yet, {$counts['failed']} failed.");
+
+    return $counts['failed'] ? 1 : 0;
+})->purpose('Sync open e-signing agreements from EunoDoc');
+
+\Illuminate\Support\Facades\Schedule::command('euno:sync')->everyFiveMinutes()->withoutOverlapping();
